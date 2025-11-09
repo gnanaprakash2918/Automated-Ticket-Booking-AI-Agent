@@ -71,7 +71,7 @@ async def search_buses(request: SearchRequest):
             'hiddenReturnJourneyDate': request.return_date,
             'hiddenAction': 'SearchService', 
             
-            # --- Default/Hardcoded fields from the original trace ---
+            # Hardcoded fields
             'languageType': 'E',
             'checkSingleLady': 'N',
 

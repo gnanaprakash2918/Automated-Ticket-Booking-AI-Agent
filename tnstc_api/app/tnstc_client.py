@@ -133,7 +133,6 @@ def parse_bus_results(html_content: str) -> List[BusService]:
                     if 'Via-' in via_text:
                         via_route = via_text.replace('Via-', '').strip()
             
-            # --- Compile and Add Service ---
             bus_services.append(BusService(
                 operator=operator_name,
                 bus_type=bus_type, 
@@ -180,7 +179,6 @@ def filter_bus_services(
 
             # 2. Time Filter
             if not re.fullmatch(r'([01]\d|2[0-3]):[0-5]\d', service.departure_time):
-                # Skip services with invalid time format
                 continue 
                 
             dep_time_int = int(service.departure_time.replace(':', ''))
