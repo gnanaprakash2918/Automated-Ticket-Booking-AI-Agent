@@ -1,5 +1,11 @@
 # Automated-Ticket-Booking-AI-Agent
 
+# Commands
+
+- `python -m venv .venv`
+- `powershell.exe -noprofile -executionpolicy bypass -file .\.venv\Scripts\activate.ps1`
+- `pip install -r requirements.txt`
+
 ## Initial Plan
 
 - Develop an API Wrapper for TNSTC
