@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import logging
 
 # Initialize FastAPI App
 app = FastAPI(
@@ -17,3 +18,11 @@ app.add_middleware(
     # Change to frontend after completion
     allow_origins = ['*'],
 )
+
+@app.get('/', tags = ['Health'])
+async def check_health():
+    logging.info('Health Check Endpoint was hit.')
+    return {
+        "status" : "ok",
+        "message" : "TNSTC API Wrapper is running."
+    }
