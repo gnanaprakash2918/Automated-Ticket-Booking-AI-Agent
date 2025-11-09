@@ -1,6 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import logging
+import uvicorn
+
+# Setup Logging Config
+logging.basicConfig(level = logging.INFO)
 
 # Initialize FastAPI App
 app = FastAPI(
@@ -22,7 +26,11 @@ app.add_middleware(
 @app.get('/', tags = ['Health'])
 async def check_health():
     logging.info('Health Check Endpoint was hit.')
+
     return {
         "status" : "ok",
         "message" : "TNSTC API Wrapper is running."
     }
+
+if __name__ == "__main__":
+    uvicorn.run("app:app", host = "localhost", port = 9000, reload = True)
