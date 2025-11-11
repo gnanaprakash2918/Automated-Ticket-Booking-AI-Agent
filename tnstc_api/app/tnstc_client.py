@@ -51,9 +51,12 @@ async def get_place_info(client: httpx.AsyncClient, place_name: str, is_from_pla
 
 
 # Parse the HTML to JSON
-def parse_bus_results(html_content: str) -> List[BusService]:
+async def parse_bus_results(client: httpx.AsyncClient, html_content: str) -> List[BusService]:
     """
     Parses the raw HTML search results into a structured list of BusService models.
+
+    It first tries to get detailed data by calling 'loadTripDetails' for each bus.
+    If that fails, it falls back to scraping the data from the main list.
     """
 
     soup = BeautifulSoup(html_content, 'lxml')
@@ -62,14 +65,39 @@ def parse_bus_results(html_content: str) -> List[BusService]:
     # Go through each bus in the bus list
     for idx, bus_div in enumerate(soup.find_all('div', class_ = 'bus-list')):
         try:
-            # Extract the Onclick Attribute that calls loadTripDetails
-            a_tag = bus_div.find("a", attrs={"data-target": "#TripcodePopUp", "onclick": True})
-            onclick_attr = a_tag.get("onclick", "") if a_tag else ""
+            # 1 Get data ONLY available in the main list 'bus_div'
             
-            # 1. Basic Metadata
+            # 1.1 Bus Type
             bus_type_raw = bus_div.get('data-bus-type')
             bus_type = str(bus_type_raw).strip() if bus_type_raw is not None else "N/A"
             
+            # 1.2 Seats Available
+            seats_available = 0
+            seats_text_element_candidates = bus_div.find_all('span', class_ = 'text-1')
+            seats_text_element = next((s for s in seats_text_element_candidates if isinstance(s.string, str) and 'Seats Available' in s.string), None)
+            
+            if seats_text_element and seats_text_element.text is not None:
+                try:
+                    seats_available = int(seats_text_element.text.split(' ')[0])
+                except ValueError:
+                    print('Could not convert the number of seats to an integer.')
+
+            # 1.3 Via Route
+            via_route = None
+            via_tag_candidates = [tag for tag in bus_div.find_all('small') if tag.get('style') and 'color: blue' in tag['style']]
+            via_tag = via_tag_candidates[0] if via_tag_candidates else None
+            
+            if via_tag and via_tag.find('b'):
+                via_b_tag = via_tag.find('b')
+                if via_b_tag and via_b_tag.text is not None:
+                    via_text = via_b_tag.text.strip()
+                    if 'Via-' in via_text:
+                        via_route = via_text.replace('Via-', '').strip()
+            
+            # 1.4 Onclick attribute - Load Trip Details
+            a_tag = bus_div.find("a", attrs={"data-target": "#TripcodePopUp", "onclick": True})
+            onclick_attr = a_tag.get("onclick", "") if a_tag else ""
+
             operator_element = bus_div.find('span', class_ = 'operator-name')
             operator_name = operator_element.text.strip() if operator_element else "N/A"
             
@@ -122,29 +150,6 @@ def parse_bus_results(html_content: str) -> List[BusService]:
                 parts = codes_text.split('/', 1)
                 trip_code = parts[0].strip()
                 route_code = parts[1].strip() if len(parts) > 1 else "N/A"
-            
-            # 7. Seats Available
-            seats_available = 0
-            seats_text_element_candidates = bus_div.find_all('span', class_ = 'text-1')
-            seats_text_element = next((s for s in seats_text_element_candidates if isinstance(s.string, str) and 'Seats Available' in s.string), None)
-            
-            if seats_text_element and seats_text_element.text is not None:
-                try:
-                    seats_available = int(seats_text_element.text.split(' ')[0])
-                except ValueError:
-                    print('Could not convert the number of seats to an integer.')
-
-            # 8. Via Route
-            via_route = None
-            via_tag_candidates = [tag for tag in bus_div.find_all('small') if tag.get('style') and 'color: blue' in tag['style']]
-            via_tag = via_tag_candidates[0] if via_tag_candidates else None
-            
-            if via_tag and via_tag.find('b'):
-                via_b_tag = via_tag.find('b')
-                if via_b_tag and via_b_tag.text is not None:
-                    via_text = via_b_tag.text.strip()
-                    if 'Via-' in via_text:
-                        via_route = via_text.replace('Via-', '').strip()
             
             bus_services.append(BusService(
                 operator=operator_name,
