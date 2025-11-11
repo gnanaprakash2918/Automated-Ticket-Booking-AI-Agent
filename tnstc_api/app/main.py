@@ -94,7 +94,7 @@ async def search_buses(request: SearchRequest):
             response = await client.post(final_url, data=payload)
             response.raise_for_status()
 
-            bus_list = parse_bus_results(response.text)
+            bus_list = await parse_bus_results(client, response.text)
             
             filtered_bus_list = filter_bus_services(bus_list, request) 
             

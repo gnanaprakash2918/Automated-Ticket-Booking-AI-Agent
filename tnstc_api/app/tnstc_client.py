@@ -129,18 +129,21 @@ async def parse_bus_results(client: httpx.AsyncClient, html_content: str) -> Lis
                 service_data = fallback_data
             
             bus_services.append(BusService(
-                operator=operator_name,
-                bus_type=bus_type, 
-                trip_code=trip_code,
-                route_code=route_code,
-                departure_time=departure_time,
-                arrival_time=arrival_time,
-                duration=duration,
-                price_in_rs=price,
+                operator=service_data.get('operator', 'N/A'),
+                bus_type=bus_type,
+                trip_code=service_data.get('trip_code', 'N/A'),
+                route_code=service_data.get('route_code', 'N/A'),
+                departure_time=service_data.get('departure_time', 'N/A'),
+                arrival_time=service_data.get('arrival_time', 'N/A'),
+                duration=service_data.get('duration', 'N/A'),
+                price_in_rs=service_data.get('price_in_rs', 0),
                 seats_available=seats_available,
-                via_route=via_route
+                via_route=via_route,                
+                total_kms=total_kms,
+                child_fare=child_fare
             ))
         except Exception as e:
+            print(f"Critical error parsing bus_div {idx}: {e}")
             continue
 
     return bus_services
