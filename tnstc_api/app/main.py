@@ -47,7 +47,6 @@ async def search_buses(request: SearchRequest):
 
     async with httpx.AsyncClient(timeout=30.0) as client:        
         try:
-            # Run place lookups in parallel
             from_place_task = get_place_info(client, request.from_place_name, is_from_place=True)
             to_place_task = get_place_info(client, request.to_place_name, is_from_place=False)
             
