@@ -55,7 +55,7 @@ def parse_bus_results(html_content: str) -> List[BusService]:
     Parses the raw HTML search results into a structured list of BusService models.
     """
 
-    soup = BeautifulSoup(html_content, 'html.parser')
+    soup = BeautifulSoup(html_content, 'lxml')
     bus_services = []
 
     for bus_div in soup.find_all('div', class_='bus-list'):

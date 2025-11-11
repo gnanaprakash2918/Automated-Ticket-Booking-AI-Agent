@@ -1,5 +1,5 @@
 from fastapi import FastAPI, status
-from tnstc_client import get_place_info, parse_bus_results, filter_bus_services # <-- Import filter_bus_services
+from tnstc_client import get_place_info, parse_bus_results, filter_bus_services
 from fastapi.middleware.cors import CORSMiddleware
 import logging
 import uvicorn
