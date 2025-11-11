@@ -97,66 +97,36 @@ async def parse_bus_results(client: httpx.AsyncClient, html_content: str) -> Lis
             a_tag = bus_div.find("a", attrs={"data-target": "#TripcodePopUp", "onclick": True})
             onclick_attr = a_tag.get("onclick", "") if a_tag else ""
 
-            # 2 Tries to get data from detailed HMTL Page
+            # 2. Tries to get data from detailed HMTL Page
             details_html = ""
             if onclick_attr:
                 details_html = await call_load_trip_details(client, str(onclick_attr))
 
             parsed_details = _parse_details_from_trip_html(details_html)
 
-            # Old
-            operator_element = bus_div.find('span', class_ = 'operator-name')
-            operator_name = operator_element.text.strip() if operator_element else "N/A"
-            
-            time_info_divs = bus_div.find_all('div', class_='time-info')
+            service_data = {}
+            total_kms = None
+            child_fare = None
 
-            # 2. Departure Time
-            departure_time = "N/A"
-            if len(time_info_divs) > 0 and time_info_divs[0]:
-                departure_span = time_info_divs[0].find('span')
-                if departure_span and departure_span.text is not None:
-                    departure_time = departure_span.text.strip()
-            
-            # 3. Arrival Time
-            arrival_time = "N/A"
-            if len(time_info_divs) > 2 and time_info_divs[2]:
-                arrival_span = time_info_divs[2].find('span')
-                if arrival_span and arrival_span.text is not None:
-                    arrival_time = arrival_span.text.strip()
-            
-            # 4. Duration 
-            duration = "N/A"
-            duration_element = bus_div.find('span', class_='duration')
-            if duration_element and duration_element.text is not None:
-                duration = duration_element.text.strip().replace('Hrs', '')
-            
-            # 5. Price Extraction
-            price = 0
-            price_div = bus_div.find('div', class_ = 'price')
-
-            if price_div and price_div.contents:
-                full_text = " ".join(str(element) for element in price_div.contents)
-                tokens = full_text.split()
-
+            if parsed_details:
+                service_data['operator'] = parsed_details.get('operator', 'N/A')
+                service_data['trip_code'] = parsed_details.get('trip_code', 'N/A')
+                service_data['route_code'] = parsed_details.get('route_code', 'N/A')
+                service_data['departure_time'] = parsed_details.get('departure_time', 'N/A')
+                service_data['arrival_time'] = parsed_details.get('arrival_time', 'N/A')
+                service_data['duration'] = parsed_details.get('duration', 'N/A')
+                
                 try:
-                    currency = next(t for t in tokens if t == "Rs")                    
-                    amount = next(t for t in tokens if t.isdigit())
-                    price = int(amount)
-                except StopIteration:
-                    print("Could not find 'Rs' or a numeric amount in the data.")
+                    service_data['price_in_rs'] = int(parsed_details.get('price_in_rs_str', '0'))
                 except ValueError:
-                    print('Could not convert the amount to an integer.')
-
-            # 6. Trip/Route Code Extraction
-            trip_code, route_code = "N/A", "N/A"
-            code_span_parent_candidates = bus_div.find_all('span', class_ = 'text-1 text-muted d-block')
-            code_span_parent = next((s for s in code_span_parent_candidates if s.text and '/' in s.text), None)
-            
-            if code_span_parent:
-                codes_text = code_span_parent.text.strip() if code_span_parent.text is not None else "N/A / N/A"
-                parts = codes_text.split('/', 1)
-                trip_code = parts[0].strip()
-                route_code = parts[1].strip() if len(parts) > 1 else "N/A"
+                    service_data['price_in_rs'] = 0
+                
+                total_kms = parsed_details.get('total_kms')
+                child_fare = parsed_details.get('child_fare')
+            else:
+                print(f"Warning: Falling back to old parsing method for bus {idx}")
+                fallback_data = _parse_details_from_bus_div(bus_div)
+                service_data = fallback_data
             
             bus_services.append(BusService(
                 operator=operator_name,
@@ -352,3 +322,67 @@ def _parse_details_from_trip_html(trip_html: str) -> Optional[Dict[str, Any]]:
     except Exception as e:
         print(f"Error parsing trip detail HTML: {e}")
         return None
+
+# Helper to parse the Old HTML (Not the one from load trip details)
+
+def _parse_details_from_bus_div(bus_div: BeautifulSoup) -> dict:
+    """
+    Helper with the Old logic to scrape the main list div. - Fallback
+    """
+
+    data = {}
+    
+    # 1. Operator
+    operator_element = bus_div.find('span', class_ = 'operator-name')
+    data['operator'] = operator_element.text.strip() if operator_element else "N/A"
+    
+    # 2. Departure Time
+    departure_time = "N/A"
+    time_info_divs = bus_div.find_all('div', class_='time-info')
+    if len(time_info_divs) > 0 and time_info_divs[0]:
+        departure_span = time_info_divs[0].find('span')
+        if departure_span and departure_span.text is not None:
+            departure_time = departure_span.text.strip()
+    data['departure_time'] = departure_time
+    
+    # 3. Arrival Time
+    arrival_time = "N/A"
+    if len(time_info_divs) > 2 and time_info_divs[2]:
+        arrival_span = time_info_divs[2].find('span')
+        if arrival_span and arrival_span.text is not None:
+            arrival_time = arrival_span.text.strip()
+    data['arrival_time'] = arrival_time
+
+    # 4. Duration
+    duration = "N/A"
+    duration_element = bus_div.find('span', class_='duration')
+    if duration_element and duration_element.text is not None:
+        duration = duration_element.text.strip().replace('Hrs', '')
+    data['duration'] = duration
+    
+    # 5. Price
+    price = 0
+    price_div = bus_div.find('div', class_ = 'price')
+    if price_div and price_div.contents:
+        full_text = " ".join(str(element) for element in price_div.contents)
+        tokens = full_text.split()
+        try:
+            amount = next(t for t in tokens if t.isdigit())
+            price = int(amount)
+        except (StopIteration, ValueError):
+            print("Could not find numeric price in fallback.")
+    data['price_in_rs'] = price
+    
+    # 6. Trip/Route Code
+    trip_code, route_code = "N/A", "N/A"
+    code_span_parent_candidates = bus_div.find_all('span', class_ = 'text-1 text-muted d-block')
+    code_span_parent = next((s for s in code_span_parent_candidates if s.text and '/' in s.text), None)
+    if code_span_parent:
+        codes_text = code_span_parent.text.strip() if code_span_parent.text is not None else "N/A / N/A"
+        parts = codes_text.split('/', 1)
+        trip_code = parts[0].strip()
+        route_code = parts[1].strip() if len(parts) > 1 else "N/A"
+    data['trip_code'] = trip_code
+    data['route_code'] = route_code
+
+    return data
