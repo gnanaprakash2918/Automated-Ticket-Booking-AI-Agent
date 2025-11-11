@@ -1,6 +1,6 @@
 import httpx
 from fastapi import HTTPException, status
-from typing import List
+from typing import List, Optional
 from bs4 import BeautifulSoup
 from schemas import PlaceInfo, BusService, SearchRequest
 from dotenv import load_dotenv
@@ -102,6 +102,9 @@ async def parse_bus_results(client: httpx.AsyncClient, html_content: str) -> Lis
             if onclick_attr:
                 details_html = await call_load_trip_details(client, str(onclick_attr))
 
+            parsed_details = _parse_details_from_trip_html(details_html)
+
+            # Old
             operator_element = bus_div.find('span', class_ = 'operator-name')
             operator_name = operator_element.text.strip() if operator_element else "N/A"
             
@@ -245,3 +248,100 @@ def filter_bus_services(
             continue
 
     return filtered_services
+
+# Helpers
+
+def _parse_details_from_trip_html(trip_html: str) -> Optional[dict]:
+    """
+    Helper to parse the detailed HTML from call_load_trip_details - Primary Method
+    This parses the detailed table.
+    Returns a dictionary with extracted data or None if parsing fails.
+    """
+
+    try:
+        details_soup = BeautifulSoup(trip_html, 'lxml')
+        data = {}
+        
+        # Find all data rows in the main details table
+        rows = details_soup.find_all('tr')
+        
+        # Find a value based on its label in the table
+        def find_value_by_label(label_text: str) -> Optional[str]:
+            for row in rows:
+                label_cell = row.find('td', class_ = "bodytextWithSecondMainColor")
+                
+                # Check if the label text is in this cell
+                if label_cell and label_text in label_cell.text:
+                    # Get the next cell, which contains the value
+                    value_cell = label_cell.find_next_sibling('td', class_="bodytextWithThirdMainColor")
+
+                    if value_cell:
+                        strong_cell = value_cell.find('strong')
+                        if strong_cell and strong_cell.text:
+                            return strong_cell.text.strip()
+            return None
+        
+        data['operator'] = find_value_by_label("Corporation")
+        data['trip_code'] = find_value_by_label("Service Code")
+        data['route_code'] = find_value_by_label("Route No.")
+        data['total_kms'] = find_value_by_label("Total Kms")
+        
+        # Format: "HH:MM"
+        data['duration'] = find_value_by_label("Journey Hours") 
+
+        # Adult and Child Fares
+        fare_label = next(
+            (tag for tag in details_soup.find_all('strong') 
+            if tag.string and re.search(r"Adult\s*Fare", tag.string)),
+            None
+        )
+
+        if fare_label:
+            price_span = fare_label.find_parent('div')
+            if price_span:
+                next_sibling = price_span.find_next_sibling('td')
+                if next_sibling:
+                    next_sibling_span = next_sibling.find('span', class_='button')
+                    if next_sibling_span:
+                        data['price_in_rs_str'] = next_sibling_span.text.strip()
+        
+        child_fare_label = next(
+            (tag for tag in details_soup.find_all('strong') 
+            if tag.string and re.search(r"Child\s*Fare", tag.string)),
+            None
+        )
+
+        if child_fare_label:
+            child_fare_label_div = child_fare_label.find_parent('div')
+            if child_fare_label_div:
+                next_sibling = child_fare_label_div.find_next_sibling('td')
+                if next_sibling:
+                    child_fare_span = next_sibling.find('span', class_='button')
+                    if child_fare_span:
+                        data['child_fare'] = child_fare_span.text.strip()
+
+        # Boarding/Dropping Times Table
+        stops_table = details_soup.find('table', id='table5')
+        if stops_table:
+            stop_rows = stops_table.find_all('tr')
+            if len(stop_rows) >= 3:
+                # Departure
+                dep_row_cells = stop_rows[1].find_all('td')
+                if len(dep_row_cells) >= 4:
+                    data['departure_time'] = dep_row_cells[3].text.strip()
+                
+                # Arrival
+                arr_row_cells = stop_rows[2].find_all('td')
+                if len(arr_row_cells) >= 4:
+                    data['arrival_time'] = arr_row_cells[3].text.strip()
+        
+        essentials = ['operator', 'duration', 'trip_code', 'route_code', 'price_in_rs_str', 'departure_time', 'arrival_time']
+        if all(k in data for k in essentials):
+            return data
+        else:
+            print("Warning: Missing essential data from trip detail HTML.")
+            return None
+    
+    except Exception as e:
+        print(f"Error parsing trip detail HTML: {e}")
+        return None
