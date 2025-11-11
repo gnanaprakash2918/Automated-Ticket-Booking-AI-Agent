@@ -58,8 +58,12 @@ def parse_bus_results(html_content: str) -> List[BusService]:
     soup = BeautifulSoup(html_content, 'lxml')
     bus_services = []
 
-    for bus_div in soup.find_all('div', class_='bus-list'):
+    for idx, bus_div in enumerate(soup.find_all('div', class_ = 'bus-list')):
         try:
+            a_tag = bus_div.find("a", attrs={"data-target": "#TripcodePopUp", "onclick": True})
+            onclick_attr = a_tag.get("onclick", "") if a_tag else ""
+            args = re.findall(r"'([^']*)'", str(onclick_attr))
+
             # 1. Basic Metadata
             bus_type_raw = bus_div.get('data-bus-type') 
             bus_type = str(bus_type_raw) if bus_type_raw is not None else "N/A"

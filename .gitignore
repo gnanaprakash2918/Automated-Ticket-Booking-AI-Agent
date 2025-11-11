@@ -5,6 +5,7 @@ __pycache__/
 
 # Custom
 temp/
+.vscode/
 
 # C extensions
 *.so
