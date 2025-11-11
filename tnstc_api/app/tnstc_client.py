@@ -6,6 +6,7 @@ from schemas import PlaceInfo, BusService, SearchRequest
 from dotenv import load_dotenv
 import os
 import re
+import requests
 
 load_dotenv()
 
@@ -58,32 +59,33 @@ def parse_bus_results(html_content: str) -> List[BusService]:
     soup = BeautifulSoup(html_content, 'lxml')
     bus_services = []
 
+    # Go through each bus in the bus list
     for idx, bus_div in enumerate(soup.find_all('div', class_ = 'bus-list')):
         try:
+            # Extract the Onclick Attribute that calls loadTripDetails
             a_tag = bus_div.find("a", attrs={"data-target": "#TripcodePopUp", "onclick": True})
             onclick_attr = a_tag.get("onclick", "") if a_tag else ""
-            args = re.findall(r"'([^']*)'", str(onclick_attr))
-
-            # 1. Basic Metadata
-            bus_type_raw = bus_div.get('data-bus-type') 
-            bus_type = str(bus_type_raw) if bus_type_raw is not None else "N/A"
             
-            operator_element = bus_div.find('span', class_='operator-name')
+            # 1. Basic Metadata
+            bus_type_raw = bus_div.get('data-bus-type')
+            bus_type = str(bus_type_raw).strip() if bus_type_raw is not None else "N/A"
+            
+            operator_element = bus_div.find('span', class_ = 'operator-name')
             operator_name = operator_element.text.strip() if operator_element else "N/A"
             
             time_info_divs = bus_div.find_all('div', class_='time-info')
 
-            # 2. Departure Time (Index 0)
+            # 2. Departure Time
             departure_time = "N/A"
             if len(time_info_divs) > 0 and time_info_divs[0]:
-                departure_span = time_info_divs[0].find('span', class_='text-4')
+                departure_span = time_info_divs[0].find('span')
                 if departure_span and departure_span.text is not None:
                     departure_time = departure_span.text.strip()
             
-            # 3. Arrival Time (Index 2)
+            # 3. Arrival Time
             arrival_time = "N/A"
             if len(time_info_divs) > 2 and time_info_divs[2]:
-                arrival_span = time_info_divs[2].find('span', class_='text-5')
+                arrival_span = time_info_divs[2].find('span')
                 if arrival_span and arrival_span.text is not None:
                     arrival_time = arrival_span.text.strip()
             
@@ -95,17 +97,24 @@ def parse_bus_results(html_content: str) -> List[BusService]:
             
             # 5. Price Extraction
             price = 0
-            price_div = bus_div.find('div', class_='price')
+            price_div = bus_div.find('div', class_ = 'price')
+
             if price_div and price_div.contents:
-                price_text = str(price_div.contents[-1]).strip()
+                full_text = " ".join(str(element) for element in price_div.contents)
+                tokens = full_text.split()
+
                 try:
-                    price = int(price_text)
+                    currency = next(t for t in tokens if t == "Rs")                    
+                    amount = next(t for t in tokens if t.isdigit())
+                    price = int(amount)
+                except StopIteration:
+                    print("Could not find 'Rs' or a numeric amount in the data.")
                 except ValueError:
-                    pass 
+                    print('Could not convert the amount to an integer.')
 
             # 6. Trip/Route Code Extraction
             trip_code, route_code = "N/A", "N/A"
-            code_span_parent_candidates = bus_div.find_all('span', class_='text-1 text-muted d-block')
+            code_span_parent_candidates = bus_div.find_all('span', class_ = 'text-1 text-muted d-block')
             code_span_parent = next((s for s in code_span_parent_candidates if s.text and '/' in s.text), None)
             
             if code_span_parent:
@@ -116,14 +125,14 @@ def parse_bus_results(html_content: str) -> List[BusService]:
             
             # 7. Seats Available
             seats_available = 0
-            seats_text_element_candidates = bus_div.find_all('span', class_='text-1')
+            seats_text_element_candidates = bus_div.find_all('span', class_ = 'text-1')
             seats_text_element = next((s for s in seats_text_element_candidates if isinstance(s.string, str) and 'Seats Available' in s.string), None)
             
             if seats_text_element and seats_text_element.text is not None:
                 try:
                     seats_available = int(seats_text_element.text.split(' ')[0])
                 except ValueError:
-                    pass
+                    print('Could not convert the number of seats to an integer.')
 
             # 8. Via Route
             via_route = None
@@ -153,6 +162,29 @@ def parse_bus_results(html_content: str) -> List[BusService]:
             continue
 
     return bus_services
+
+def call_load_trip_details(onclick_attr: str):
+    """
+    Extracts arguments from the onclick attribute string for calling LoadTripDetails.
+    """
+
+    args = re.findall(r"'([^']*)'", str(onclick_attr))
+
+    data = {
+        "ServiceID": args[0],
+        "TripCode": args[1],
+        "StartPlaceID": args[2],
+        "EndPlaceID": args[3],
+        "JourneyDate": args[4],
+        "ClassID": args[5],
+    }
+
+    URL = "https://www.tnstc.in/OTRSOnline/advanceNewBooking.do"
+
+    current_session = requests.Session()
+    response = current_session.post(URL, data = data)
+    # print(response.status_code)
+    # print(response.text)
 
 def filter_bus_services(
     bus_list: List[BusService], 
