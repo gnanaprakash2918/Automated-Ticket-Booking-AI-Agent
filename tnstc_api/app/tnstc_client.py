@@ -2,7 +2,7 @@ import httpx
 from fastapi import HTTPException, status
 from typing import List, Optional, Dict, Any
 from bs4 import BeautifulSoup, Tag
-from schemas import PlaceInfo, BusService, SearchRequest
+from schemas import PlaceInfo, BusService, SearchRequest 
 from dotenv import load_dotenv
 import os
 import re
@@ -123,8 +123,8 @@ async def parse_bus_results(client: httpx.AsyncClient, html_content: str) -> Lis
             
         except Exception as e:
             log.error(f"Critical error in parse_bus_results (Pass 1) for bus {idx}: {e}")
-            detail_tasks.append(asyncio.sleep(0, result=""))
-            temp_data_list.append(None)
+            detail_tasks.append(asyncio.sleep(0, result="")) # Add empty task
+            temp_data_list.append(None) # Add placeholder
 
     # 3. Run all detail tasks in parallel
     all_details_html = await asyncio.gather(*detail_tasks)
@@ -135,6 +135,7 @@ async def parse_bus_results(client: httpx.AsyncClient, html_content: str) -> Lis
         bus_div = bus_divs[idx]
 
         if main_list_data is None:
+            # Skip if Pass 1 failed for this bus
             continue
             
         try:
@@ -177,7 +178,6 @@ async def parse_bus_results(client: httpx.AsyncClient, html_content: str) -> Lis
                 if parsed_details.get('duration'):
                     service_data['duration'] = parsed_details['duration']
                 
-                # Special handling for price (it's a string in parsed_details)
                 try:
                     price_str = parsed_details.get('price_in_rs_str')
                     if price_str:
@@ -188,6 +188,9 @@ async def parse_bus_results(client: httpx.AsyncClient, html_content: str) -> Lis
                 # Get the extra data that only parsed_details has
                 total_kms = parsed_details.get('total_kms')
                 child_fare = parsed_details.get('child_fare')
+
+                if child_fare is None:
+                    child_fare = "NA"
             
             # 5. Append the final merged object
             bus_services.append(BusService(
@@ -296,6 +299,7 @@ def filter_bus_services(
 def _parse_key_value_table(rows: list) -> Dict[str, str]:
     """
     Parses all <tr> elements from the main details table into a key-value map.
+    Cleans the labels to remove ':', '*', and '\xa0'.
     """
 
     details_map = {}
@@ -304,8 +308,12 @@ def _parse_key_value_table(rows: list) -> Dict[str, str]:
         value_cell = row.find('td', attrs={"class": "bodytextWithThirdMainColor"})
 
         if label_cell and value_cell:
-            label = label_cell.text.strip().replace(':', '').strip()
-            label = label.replace('\xa0', ' ') # Replace non-breaking space
+            # Clean up the label text
+            label = label_cell.text.strip()
+            label = label.replace(':', '')
+            label = label.replace('\xa0', ' ')
+            label = label.replace('*', '')
+            label = label.strip()
             
             strong_val = value_cell.find('strong')
             value = (strong_val.text.strip() if strong_val 
@@ -328,12 +336,16 @@ def _parse_fares(details_soup: BeautifulSoup, data: Dict[str, Any]) -> None:
             )
             
             if not fare_label:
+                # Handle the case where the label might not be in a <strong> tag
                 fare_div = details_soup.find('div', string=fare_pattern) # type: ignore
                 if fare_div:
                     fare_label = fare_div
                 else:
                     return None
 
+            # Find the price span, which is in a complex structure
+            # Traverse up to the common ancestor and then find the price
+            
             # Try to find <td> -> <div> -> <strong>
             parent_div = fare_label.find_parent('div')
             if not parent_div:
@@ -368,7 +380,7 @@ def _parse_stops_table(details_soup: BeautifulSoup, data: Dict[str, Any]) -> Non
         log.warning("Could not find 'listHeading' row in trip details.")
         return
 
-    data_rows = list_heading_tr.find_next_siblings('tr')
+    data_rows = list_heading_tr.find_next_siblings('tr')   
     valid_rows = [r for r in data_rows if r.find('td')]
     
     if not valid_rows:
@@ -424,7 +436,7 @@ def _parse_details_from_trip_html(trip_html: str) -> Optional[Dict[str, Any]]:
     
     except Exception as e:
         log.error(f"Error parsing trip detail HTML: {e}")
-        return None # Return None on a major parsing crash
+        return None
 
 
 # Helper to parse the Old HTML (Not the one from load trip details)
