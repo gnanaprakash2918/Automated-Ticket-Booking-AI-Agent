@@ -6,6 +6,7 @@ import uvicorn
 import httpx
 from fastapi import FastAPI, HTTPException
 from schemas import SearchRequest, BusSearchResponse
+import asyncio
 
 # Setup Logging Config
 logging.basicConfig(level = logging.INFO)
@@ -46,8 +47,12 @@ async def search_buses(request: SearchRequest):
 
     async with httpx.AsyncClient(timeout=30.0) as client:        
         try:
-            from_place = await get_place_info(client, request.from_place_name, is_from_place=True)
-            to_place = await get_place_info(client, request.to_place_name, is_from_place=False)
+            # Run place lookups in parallel
+            from_place_task = get_place_info(client, request.from_place_name, is_from_place=True)
+            to_place_task = get_place_info(client, request.to_place_name, is_from_place=False)
+            
+            from_place, to_place = await asyncio.gather(from_place_task, to_place_task)
+            
         except HTTPException:
             raise
         except Exception as e:
