@@ -6,7 +6,6 @@ from schemas import PlaceInfo, BusService, SearchRequest
 from dotenv import load_dotenv
 import os
 import re
-import requests
 
 load_dotenv()
 
@@ -98,6 +97,11 @@ async def parse_bus_results(client: httpx.AsyncClient, html_content: str) -> Lis
             a_tag = bus_div.find("a", attrs={"data-target": "#TripcodePopUp", "onclick": True})
             onclick_attr = a_tag.get("onclick", "") if a_tag else ""
 
+            # 2 Tries to get data from detailed HMTL Page
+            details_html = ""
+            if onclick_attr:
+                details_html = await call_load_trip_details(client, str(onclick_attr))
+
             operator_element = bus_div.find('span', class_ = 'operator-name')
             operator_name = operator_element.text.strip() if operator_element else "N/A"
             
@@ -168,7 +172,7 @@ async def parse_bus_results(client: httpx.AsyncClient, html_content: str) -> Lis
 
     return bus_services
 
-def call_load_trip_details(onclick_attr: str):
+async def call_load_trip_details(client: httpx.AsyncClient, onclick_attr: str) -> str:
     """
     Extracts arguments from the onclick attribute string for calling LoadTripDetails.
     """
@@ -186,10 +190,13 @@ def call_load_trip_details(onclick_attr: str):
 
     URL = "https://www.tnstc.in/OTRSOnline/advanceNewBooking.do"
 
-    current_session = requests.Session()
-    response = current_session.post(URL, data = data)
-    # print(response.status_code)
-    # print(response.text)
+    try:
+        response = await client.post(URL, data=data)
+        response.raise_for_status()
+        return response.text
+    except httpx.RequestError as e:
+        print(f"Network error calling loadTripDetails: {e}")
+        return ""
 
 def filter_bus_services(
     bus_list: List[BusService], 
