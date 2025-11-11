@@ -128,5 +128,5 @@ async def search_buses(request: SearchRequest):
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"External API network request failed: {e}")
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="localhost", port=9000, reload=True)
+    uvicorn.run("tnstc_api.main:app", host="localhost", port=9000, reload=True)
     # uvicorn.run('main:app', host=os.getenv('HOST', '0.0.0.0'), port=int(os.getenv('PORT', '9000')), reload=(os.getenv('RELOAD','false').lower()=='true'))
