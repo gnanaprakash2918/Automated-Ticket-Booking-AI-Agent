@@ -271,6 +271,7 @@ def _parse_key_value_table(rows: list) -> Dict[str, str]:
 
         if label_cell and value_cell:
             label = label_cell.text.strip().replace(':', '').strip()
+            label = label.replace('\xa0', ' ')
             strong_val = value_cell.find('strong')
             value = (strong_val.text.strip() if strong_val 
                      else value_cell.text.strip())
