@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException
 from .schemas import SearchRequest, BusSearchResponse
 import asyncio
 import logging
+import os
 from utils.logging_setup import setup_logging
 
 setup_logging()
@@ -21,14 +22,14 @@ app = FastAPI(
     version = "1.0.0",
 )
 
+FRONTEND_ORIGINS = os.getenv('FRONTEND_ORIGINS', 'http://localhost:3000,*').split(',')
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials = True,
     allow_methods = ['GET', 'POST'],
     allow_headers = ['*'],
-
-    # Change to frontend after completion
-    allow_origins = ['*'],
+    allow_origins = FRONTEND_ORIGINS,
 )
 
 @app.get('/', tags = ['Health'])
@@ -127,4 +128,5 @@ async def search_buses(request: SearchRequest):
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"External API network request failed: {e}")
 
 if __name__ == "__main__":
-    uvicorn.run("tnstc_api.main:app", host="localhost", port=9000, reload=True)
+    uvicorn.run("main:app", host="localhost", port=9000, reload=True)
+    # uvicorn.run('main:app', host=os.getenv('HOST', '0.0.0.0'), port=int(os.getenv('PORT', '9000')), reload=(os.getenv('RELOAD','false').lower()=='true'))
