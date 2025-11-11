@@ -47,6 +47,9 @@ class BusService(BaseModel):
     seats_available: int = Field(default=..., description="Number of available seats.")
     via_route: Optional[str] = Field(default=None, description="Key intermediate stops on the route.")
 
+    total_kms: Optional[str] = Field(default=None, description="Approximate total distance in kilometers.")
+    child_fare: Optional[str] = Field(default=None, description="Child fare, if available (can be 'NA').")
+
     model_config = {
         "json_schema_extra": {
             "examples": [
@@ -60,7 +63,9 @@ class BusService(BaseModel):
                     "duration": "7.45",
                     "price_in_rs": 350,
                     "seats_available": 20,
-                    "via_route": "TIRUPATHUR,VELLORE"
+                    "via_route": "TIRUPATHUR,VELLORE",
+                    "total_kms": "308.00",
+                    "child_fare": "NA"
                 }
             ]
         }
@@ -75,10 +80,33 @@ class BusService(BaseModel):
 
     @field_validator('duration')
     @classmethod
-    def positive_duration(cls, v: str) -> str:
-        if float(v) <= 0:
-            raise ValueError('duration must be positive')
-        return v
+    def validate_and_normalize_duration(cls, v: str) -> str:
+        """
+        Validates duration is positive and normalizes it to a float string.
+        Handles both "HH:MM" (e.g., "7:30") and float-string (e.g., "7.45").
+        """
+        if ':' in v:
+            # Handle "HH:MM" format from the new parser
+            try:
+                hours, minutes = v.split(':')
+                total_hours = int(hours) + (int(minutes) / 60)
+                if total_hours <= 0:
+                     raise ValueError('duration must be positive')
+                
+                # Return as standardized float string, e.g., "7.50"
+                return f"{total_hours:.2f}" 
+            except Exception:
+                raise ValueError('invalid HH:MM duration format')
+        else:
+            # Handle float string format (e.g., "7.45") from the old parser
+            try:
+                if float(v) <= 0:
+                    raise ValueError('duration must be positive')
+                
+                # Already in the correct format
+                return v
+            except ValueError:
+                raise ValueError('duration must be a valid float string or HH:MM')
 
     @field_validator('price_in_rs', 'seats_available')
     @classmethod
@@ -188,7 +216,9 @@ class BusSearchResponse(BaseModel):
                             "duration": "7.45",
                             "price_in_rs": 350,
                             "seats_available": 20,
-                            "via_route": "TIRUPATHUR,VELLORE"
+                            "via_route": "TIRUPATHUR,VELLORE",
+                            "total_kms": "308.00",
+                            "child_fare": "NA"
                         }
                     ]
                 }
