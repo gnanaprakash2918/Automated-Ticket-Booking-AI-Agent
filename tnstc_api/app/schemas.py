@@ -45,7 +45,7 @@ class BusService(BaseModel):
     duration: str = Field(default=..., description="Total journey duration in hours, decimal allowed.")
     price_in_rs: int = Field(default=..., description="Base ticket price in Rupees.")
     seats_available: int = Field(default=..., description="Number of available seats.")
-    via_route: Optional[str] = Field(default=None, description="Key intermediate stops on the route.")
+    via_route: Optional[List[str]] = Field(default=None, description="List of key intermediate stops on the route.")
 
     total_kms: Optional[str] = Field(default=None, description="Approximate total distance in kilometers.")
     child_fare: Optional[str] = Field(default=None, description="Child fare, if available (can be 'NA').")
@@ -63,7 +63,7 @@ class BusService(BaseModel):
                     "duration": "7.45",
                     "price_in_rs": 350,
                     "seats_available": 20,
-                    "via_route": "TIRUPATHUR,VELLORE",
+                    "via_route": ["TIRUPATHUR", "VELLORE"],
                     "total_kms": "308.00",
                     "child_fare": "NA"
                 }
@@ -216,7 +216,7 @@ class BusSearchResponse(BaseModel):
                             "duration": "7.45",
                             "price_in_rs": 350,
                             "seats_available": 20,
-                            "via_route": "TIRUPATHUR,VELLORE",
+                            "via_route": ["TIRUPATHUR", "VELLORE"],
                             "total_kms": "308.00",
                             "child_fare": "NA"
                         }

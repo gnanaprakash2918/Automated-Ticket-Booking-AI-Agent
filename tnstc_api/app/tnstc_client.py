@@ -1,7 +1,7 @@
 import httpx
 from fastapi import HTTPException, status
 from typing import List, Optional, Dict, Any
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 from schemas import PlaceInfo, BusService, SearchRequest
 from dotenv import load_dotenv
 import os
@@ -82,7 +82,7 @@ async def parse_bus_results(client: httpx.AsyncClient, html_content: str) -> Lis
                     print('Could not convert the number of seats to an integer.')
 
             # 1.3 Via Route
-            via_route = None
+            via_route_list: Optional[List[str]] = None # Initialize as list or None
             via_tag_candidates = [tag for tag in bus_div.find_all('small') if tag.get('style') and 'color: blue' in tag['style']]
             via_tag = via_tag_candidates[0] if via_tag_candidates else None
             
@@ -91,7 +91,10 @@ async def parse_bus_results(client: httpx.AsyncClient, html_content: str) -> Lis
                 if via_b_tag and via_b_tag.text is not None:
                     via_text = via_b_tag.text.strip()
                     if 'Via-' in via_text:
-                        via_route = via_text.replace('Via-', '').strip()
+                        route_string = via_text.replace('Via-', '').strip()
+                        if route_string: 
+                            # Split string by comma, strip whitespace from each, and filter out any empty strings
+                            via_route_list = [stop.strip() for stop in route_string.split(',') if stop.strip()]
             
             # 1.4 Onclick attribute - Load Trip Details
             a_tag = bus_div.find("a", attrs={"data-target": "#TripcodePopUp", "onclick": True})
@@ -138,10 +141,11 @@ async def parse_bus_results(client: httpx.AsyncClient, html_content: str) -> Lis
                 duration=service_data.get('duration', 'N/A'),
                 price_in_rs=service_data.get('price_in_rs', 0),
                 seats_available=seats_available,
-                via_route=via_route,                
+                via_route=via_route_list,                
                 total_kms=total_kms,
                 child_fare=child_fare
             ))
+
         except Exception as e:
             print(f"Critical error parsing bus_div {idx}: {e}")
             continue
@@ -250,9 +254,10 @@ def _parse_fares(details_soup: BeautifulSoup, data: Dict[str, Any]) -> None:
     def find_fare_value(pattern_str: str) -> Optional[str]:
         """Nested helper to find a specific fare by its label pattern."""
         try:
+            fare_pattern = re.compile(pattern_str)
             fare_label = details_soup.find(
                 'strong',
-                string = lambda text: bool(text and re.search(pattern_str, text))
+                string = fare_pattern # type: ignore
             )
             
             if not fare_label:
@@ -328,7 +333,7 @@ def _parse_details_from_trip_html(trip_html: str) -> Optional[Dict[str, Any]]:
 
 # Helper to parse the Old HTML (Not the one from load trip details)
 
-def _parse_details_from_bus_div(bus_div: BeautifulSoup) -> dict:
+def _parse_details_from_bus_div(bus_div: Tag) -> dict:
     """
     Helper with the Old logic to scrape the main list div. - Fallback
     """
