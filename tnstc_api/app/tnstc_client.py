@@ -1,6 +1,6 @@
 import httpx
 from fastapi import HTTPException, status
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from bs4 import BeautifulSoup
 from schemas import PlaceInfo, BusService, SearchRequest
 from dotenv import load_dotenv
@@ -251,95 +251,102 @@ def filter_bus_services(
 
 # Helpers
 
-def _parse_details_from_trip_html(trip_html: str) -> Optional[dict]:
+def _parse_key_value_table(rows: list) -> Dict[str, str]:
     """
-    Helper to parse the detailed HTML from call_load_trip_details - Primary Method
-    This parses the detailed table.
+    Parses all <tr> elements from the main details table into a key-value map.
+    """
+
+    details_map = {}
+    for row in rows:
+        label_cell = row.find('td', attrs={"class": "bodytextWithSecondMainColor"})
+        value_cell = row.find('td', attrs={"class": "bodytextWithThirdMainColor"})
+
+        if label_cell and value_cell:
+            label = label_cell.text.strip().replace(':', '').strip()
+            strong_val = value_cell.find('strong')
+            value = (strong_val.text.strip() if strong_val 
+                     else value_cell.text.strip())
+            details_map[label] = value
+    return details_map
+
+def _parse_fares(details_soup: BeautifulSoup, data: Dict[str, Any]) -> None:
+    """
+    Finds the Adult and Child fares.
+    """
+    
+    def find_fare_value(pattern_str: str) -> Optional[str]:
+        """Nested helper to find a specific fare by its label pattern."""
+        try:
+            fare_label = details_soup.find(
+                'strong',
+                string = lambda text: bool(text and re.search(pattern_str, text))
+            )
+            
+            if not fare_label:
+                return None
+
+            price_span = (
+                fare_label.find_parent('div')
+                .find_next_sibling('td')
+                .find('span', attrs={'class': 'button'})
+            )
+            
+            if price_span:
+                return price_span.text.strip()
+        except AttributeError:
+            return None
+        return None
+
+    data['price_in_rs_str'] = find_fare_value(r"Adult\s*Fare")
+    data['child_fare'] = find_fare_value(r"Child\s*Fare")
+
+def _parse_stops_table(details_soup: BeautifulSoup, data: Dict[str, Any]) -> None:
+    """Parses the departure and arrival times from the stops table"""
+
+    stops_table = details_soup.find('table', attrs={'id': 'table5'})
+    if not stops_table:
+        return
+
+    dep_cell = stops_table.select_one('tr:nth-of-type(2) td:nth-of-type(4)')
+    if dep_cell:
+        data['departure_time'] = dep_cell.text.strip()
+    
+    arr_cell = stops_table.select_one('tr:nth-of-type(3) td:nth-of-type(4)')
+    if arr_cell:
+        data['arrival_time'] = arr_cell.text.strip()
+
+def _parse_details_from_trip_html(trip_html: str) -> Optional[Dict[str, Any]]:
+    """
+    Helper to parse the detailed HTML from call_load_trip_details.
     Returns a dictionary with extracted data or None if parsing fails.
     """
-
     try:
         details_soup = BeautifulSoup(trip_html, 'lxml')
-        data = {}
+        data: Dict[str, Any] = {}
         
-        # Find all data rows in the main details table
         rows = details_soup.find_all('tr')
+        details_map = _parse_key_value_table(rows)
         
-        # Find a value based on its label in the table
-        def find_value_by_label(label_text: str) -> Optional[str]:
-            for row in rows:
-                label_cell = row.find('td', class_ = "bodytextWithSecondMainColor")
-                
-                # Check if the label text is in this cell
-                if label_cell and label_text in label_cell.text:
-                    # Get the next cell, which contains the value
-                    value_cell = label_cell.find_next_sibling('td', class_="bodytextWithThirdMainColor")
-
-                    if value_cell:
-                        strong_cell = value_cell.find('strong')
-                        if strong_cell and strong_cell.text:
-                            return strong_cell.text.strip()
-            return None
+        data['operator'] = details_map.get("Corporation")
+        data['trip_code'] = details_map.get("Service Code")
+        data['route_code'] = details_map.get("Route No.")
+        data['total_kms'] = details_map.get("Total Kms")
+        data['duration'] = details_map.get("Journey Hours")
         
-        data['operator'] = find_value_by_label("Corporation")
-        data['trip_code'] = find_value_by_label("Service Code")
-        data['route_code'] = find_value_by_label("Route No.")
-        data['total_kms'] = find_value_by_label("Total Kms")
+        _parse_fares(details_soup, data)
         
-        # Format: "HH:MM"
-        data['duration'] = find_value_by_label("Journey Hours") 
-
-        # Adult and Child Fares
-        fare_label = next(
-            (tag for tag in details_soup.find_all('strong') 
-            if tag.string and re.search(r"Adult\s*Fare", tag.string)),
-            None
-        )
-
-        if fare_label:
-            price_span = fare_label.find_parent('div')
-            if price_span:
-                next_sibling = price_span.find_next_sibling('td')
-                if next_sibling:
-                    next_sibling_span = next_sibling.find('span', class_='button')
-                    if next_sibling_span:
-                        data['price_in_rs_str'] = next_sibling_span.text.strip()
+        _parse_stops_table(details_soup, data)
         
-        child_fare_label = next(
-            (tag for tag in details_soup.find_all('strong') 
-            if tag.string and re.search(r"Child\s*Fare", tag.string)),
-            None
-        )
-
-        if child_fare_label:
-            child_fare_label_div = child_fare_label.find_parent('div')
-            if child_fare_label_div:
-                next_sibling = child_fare_label_div.find_next_sibling('td')
-                if next_sibling:
-                    child_fare_span = next_sibling.find('span', class_='button')
-                    if child_fare_span:
-                        data['child_fare'] = child_fare_span.text.strip()
-
-        # Boarding/Dropping Times Table
-        stops_table = details_soup.find('table', id='table5')
-        if stops_table:
-            stop_rows = stops_table.find_all('tr')
-            if len(stop_rows) >= 3:
-                # Departure
-                dep_row_cells = stop_rows[1].find_all('td')
-                if len(dep_row_cells) >= 4:
-                    data['departure_time'] = dep_row_cells[3].text.strip()
-                
-                # Arrival
-                arr_row_cells = stop_rows[2].find_all('td')
-                if len(arr_row_cells) >= 4:
-                    data['arrival_time'] = arr_row_cells[3].text.strip()
+        essentials = [
+            'operator', 'duration', 'trip_code', 'route_code', 
+            'price_in_rs_str', 'departure_time', 'arrival_time'
+        ]
         
-        essentials = ['operator', 'duration', 'trip_code', 'route_code', 'price_in_rs_str', 'departure_time', 'arrival_time']
-        if all(k in data for k in essentials):
+        if all(data.get(k) for k in essentials):
             return data
         else:
-            print("Warning: Missing essential data from trip detail HTML.")
+            missing = [k for k in essentials if not data.get(k)]
+            print(f"Warning: Missing essential data from trip detail HTML: {missing}")
             return None
     
     except Exception as e:
