@@ -6,6 +6,8 @@ from schemas import PlaceInfo, BusService, SearchRequest
 from dotenv import load_dotenv
 import os
 import re
+import logging
+import asyncio
 
 load_dotenv()
 
@@ -54,15 +56,20 @@ async def parse_bus_results(client: httpx.AsyncClient, html_content: str) -> Lis
     """
     Parses the raw HTML search results into a structured list of BusService models.
 
-    It first tries to get detailed data by calling 'loadTripDetails' for each bus.
-    If that fails, it falls back to scraping the data from the main list.
+    It first tries to get detailed data by calling 'loadTripDetails' for each bus
+    concurrently, and if that fails, it falls back to scraping the data from the
+    main list.
     """
 
     soup = BeautifulSoup(html_content, 'lxml')
     bus_services = []
+        
+    detail_tasks = []
+    temp_data_list = []
+    bus_divs = soup.find_all('div', class_ = 'bus-list')
 
-    # Go through each bus in the bus list
-    for idx, bus_div in enumerate(soup.find_all('div', class_ = 'bus-list')):
+    # Scrape main list and create detail-call tasks
+    for idx, bus_div in enumerate(bus_divs):
         try:
             # 1 Get data ONLY available in the main list 'bus_div'
             
@@ -79,10 +86,10 @@ async def parse_bus_results(client: httpx.AsyncClient, html_content: str) -> Lis
                 try:
                     seats_available = int(seats_text_element.text.split(' ')[0])
                 except ValueError:
-                    print('Could not convert the number of seats to an integer.')
+                    logging.warning('Could not convert the number of seats to an integer.')
 
             # 1.3 Via Route
-            via_route_list: Optional[List[str]] = None # Initialize as list or None
+            via_route_list: Optional[List[str]] = None
             via_tag_candidates = [tag for tag in bus_div.find_all('small') if tag.get('style') and 'color: blue' in tag['style']]
             via_tag = via_tag_candidates[0] if via_tag_candidates else None
             
@@ -93,18 +100,41 @@ async def parse_bus_results(client: httpx.AsyncClient, html_content: str) -> Lis
                     if 'Via-' in via_text:
                         route_string = via_text.replace('Via-', '').strip()
                         if route_string: 
-                            # Split string by comma, strip whitespace from each, and filter out any empty strings
                             via_route_list = [stop.strip() for stop in route_string.split(',') if stop.strip()]
             
             # 1.4 Onclick attribute - Load Trip Details
             a_tag = bus_div.find("a", attrs={"data-target": "#TripcodePopUp", "onclick": True})
             onclick_attr = a_tag.get("onclick", "") if a_tag else ""
 
-            # 2. Tries to get data from detailed HMTL Page
-            details_html = ""
+            # 2. Add task to get detailed HTML
             if onclick_attr:
-                details_html = await call_load_trip_details(client, str(onclick_attr))
+                detail_tasks.append(call_load_trip_details(client, str(onclick_attr)))
+            else:
+                detail_tasks.append(asyncio.sleep(0, result=""))
 
+            temp_data_list.append({
+                "bus_type": bus_type,
+                "seats_available": seats_available,
+                "via_route_list": via_route_list
+            })
+            
+        except Exception as e:
+            logging.error(f"Critical error in parse_bus_results (Pass 1) for bus {idx}: {e}")
+            detail_tasks.append(asyncio.sleep(0, result=""))
+            temp_data_list.append(None)
+
+    # 3. Run all detail tasks in parallel
+    all_details_html = await asyncio.gather(*detail_tasks)
+
+    # Combine main list data with detail data
+    for idx, details_html in enumerate(all_details_html):
+        main_list_data = temp_data_list[idx]
+        bus_div = bus_divs[idx]
+
+        if main_list_data is None:
+            continue
+            
+        try:
             parsed_details = _parse_details_from_trip_html(details_html)
 
             service_data = {}
@@ -127,27 +157,28 @@ async def parse_bus_results(client: httpx.AsyncClient, html_content: str) -> Lis
                 total_kms = parsed_details.get('total_kms')
                 child_fare = parsed_details.get('child_fare')
             else:
-                print(f"Warning: Falling back to old parsing method for bus {idx}")
+                if details_html:
+                    logging.warning(f"Warning: Falling back to old parsing method for bus {idx}")
                 fallback_data = _parse_details_from_bus_div(bus_div)
                 service_data = fallback_data
             
             bus_services.append(BusService(
                 operator=service_data.get('operator', 'N/A'),
-                bus_type=bus_type,
+                bus_type=main_list_data['bus_type'],
                 trip_code=service_data.get('trip_code', 'N/A'),
                 route_code=service_data.get('route_code', 'N/A'),
                 departure_time=service_data.get('departure_time', 'N/A'),
                 arrival_time=service_data.get('arrival_time', 'N/A'),
                 duration=service_data.get('duration', 'N/A'),
                 price_in_rs=service_data.get('price_in_rs', 0),
-                seats_available=seats_available,
-                via_route=via_route_list,                
+                seats_available=main_list_data['seats_available'],
+                via_route=main_list_data['via_route_list'],                
                 total_kms=total_kms,
                 child_fare=child_fare
             ))
 
         except Exception as e:
-            print(f"Critical error parsing bus_div {idx}: {e}")
+            logging.error(f"Critical error in parse_bus_results (Pass 2) for bus {idx}: {e}")
             continue
 
     return bus_services
@@ -175,7 +206,7 @@ async def call_load_trip_details(client: httpx.AsyncClient, onclick_attr: str) -
         response.raise_for_status()
         return response.text
     except httpx.RequestError as e:
-        print(f"Network error calling loadTripDetails: {e}")
+        logging.error(f"Network error calling loadTripDetails: {e}")
         return ""
 
 def filter_bus_services(
@@ -298,6 +329,9 @@ def _parse_details_from_trip_html(trip_html: str) -> Optional[Dict[str, Any]]:
     Helper to parse the detailed HTML from call_load_trip_details.
     Returns a dictionary with extracted data or None if parsing fails.
     """
+    if not trip_html:
+        return None
+
     try:
         details_soup = BeautifulSoup(trip_html, 'lxml')
         data: Dict[str, Any] = {}
@@ -324,11 +358,11 @@ def _parse_details_from_trip_html(trip_html: str) -> Optional[Dict[str, Any]]:
             return data
         else:
             missing = [k for k in essentials if not data.get(k)]
-            print(f"Warning: Missing essential data from trip detail HTML: {missing}")
+            logging.warning(f"Warning: Missing essential data from trip detail HTML: {missing}")
             return None
     
     except Exception as e:
-        print(f"Error parsing trip detail HTML: {e}")
+        logging.error(f"Error parsing trip detail HTML: {e}")
         return None
 
 # Helper to parse the Old HTML (Not the one from load trip details)
@@ -378,7 +412,7 @@ def _parse_details_from_bus_div(bus_div: Tag) -> dict:
             amount = next(t for t in tokens if t.isdigit())
             price = int(amount)
         except (StopIteration, ValueError):
-            print("Could not find numeric price in fallback.")
+            logging.warning("Could not find numeric price in fallback.")
     data['price_in_rs'] = price
     
     # 6. Trip/Route Code
