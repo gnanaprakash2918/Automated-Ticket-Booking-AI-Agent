@@ -2,14 +2,15 @@ import httpx
 from fastapi import HTTPException, status
 from typing import List, Optional, Dict, Any
 from bs4 import BeautifulSoup, Tag
-from schemas import PlaceInfo, BusService, SearchRequest 
+from .schemas import PlaceInfo, BusService, SearchRequest 
 from dotenv import load_dotenv
 import os
 import re
-import logging
 import asyncio
+import logging
+from utils.logging_setup import setup_logging
 
-logging.basicConfig(level=logging.INFO)
+setup_logging()
 log = logging.getLogger(__name__)
 
 load_dotenv()

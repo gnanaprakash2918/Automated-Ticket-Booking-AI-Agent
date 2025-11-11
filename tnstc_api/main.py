@@ -1,15 +1,18 @@
 from fastapi import FastAPI, status
-from tnstc_client import get_place_info, parse_bus_results, filter_bus_services
+from .tnstc_client import get_place_info, parse_bus_results, filter_bus_services
 from fastapi.middleware.cors import CORSMiddleware
 import logging
 import uvicorn
 import httpx
 from fastapi import FastAPI, HTTPException
-from schemas import SearchRequest, BusSearchResponse
+from .schemas import SearchRequest, BusSearchResponse
 import asyncio
+import logging
+from utils.logging_setup import setup_logging
 
-# Setup Logging Config
-logging.basicConfig(level = logging.INFO)
+setup_logging()
+log = logging.getLogger(__name__)
+
 
 # Initialize FastAPI App
 app = FastAPI(
@@ -124,4 +127,4 @@ async def search_buses(request: SearchRequest):
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"External API network request failed: {e}")
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host = "localhost", port = 9000, reload = True)
+    uvicorn.run("tnstc_api.main:app", host="localhost", port=9000, reload=True)
