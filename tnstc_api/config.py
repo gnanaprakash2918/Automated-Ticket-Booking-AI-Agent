@@ -22,3 +22,5 @@ GEMINI_API_URL: str = f"https://generativelanguage.googleapis.com/v1beta/models/
 OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama3:8b")
 OLLAMA_API_URL: str = f"{OLLAMA_BASE_URL}/api/generate"
+
+OLLAMA_CONCURRENCY_LIMIT: int = int(os.getenv("OLLAMA_CONCURRENCY_LIMIT", "5"))

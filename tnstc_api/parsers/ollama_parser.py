@@ -6,7 +6,7 @@ from ..schemas import BusService
 import json
 import asyncio
 import logging
-from ..config import OLLAMA_API_URL, OLLAMA_MODEL
+from ..config import OLLAMA_API_URL, OLLAMA_MODEL, OLLAMA_CONCURRENCY_LIMIT
 from tenacity import retry, wait_exponential, stop_after_attempt
 
 log = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ class OllamaParser:
 
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=30),
-        stop=stop_after_attempt(3), # Retry 3 times
+        stop=stop_after_attempt(3),
         reraise=True
     )
     async def _parse_chunk_with_ollama(
@@ -89,7 +89,6 @@ class OllamaParser:
                 return None
                 
             parsed_data = json.loads(raw_json_string)
-            
             bus_service = BusService(**parsed_data)
             return bus_service
             
@@ -109,6 +108,25 @@ class OllamaParser:
             log.error(f"OllamaParser: Bus {bus_index}: Unexpected error: {e}")
             return None
 
+    async def _wrapper_parse_chunk(
+            self, 
+            semaphore: asyncio.Semaphore, 
+            client: httpx.AsyncClient, 
+            html_chunk: str, 
+            idx: int
+        ) -> Optional[BusService]:
+            """
+            A wrapper that acquires the semaphore before calling the
+            parsing function.
+            """
+            async with semaphore:
+                log.debug(f"OllamaParser: [Semaphore Acquired] Parsing chunk {idx}...")
+                try:
+                    return await self._parse_chunk_with_ollama(client, html_chunk, idx)
+                finally:
+                    # The semaphore is automatically released here
+                    log.debug(f"OllamaParser: [Semaphore Released] Finished chunk {idx}.")
+
     async def parse(
         self, 
         client: httpx.AsyncClient, 
@@ -120,7 +138,9 @@ class OllamaParser:
         """
         
         log.info(f"Using OllamaParser with model {OLLAMA_MODEL}...")
-        
+        semaphore = asyncio.Semaphore(OLLAMA_CONCURRENCY_LIMIT)
+        log.info(f"Ollama concurrency limited to {OLLAMA_CONCURRENCY_LIMIT} simultaneous requests.")
+
         soup = BeautifulSoup(html_content, 'lxml')
         bus_divs = soup.find_all('div', class_ = 'bus-list')
         
@@ -131,8 +151,7 @@ class OllamaParser:
         tasks = []
         for idx, bus_div in enumerate(bus_divs):
             chunk_html = str(bus_div)
-            tasks.append(self._parse_chunk_with_ollama(client, chunk_html, idx))
-            
+            tasks.append(self._wrapper_parse_chunk(semaphore, client, chunk_html, idx))            
         results = await asyncio.gather(*tasks)
         
         bus_services: List[BusService] = [service for service in results if service is not None]
