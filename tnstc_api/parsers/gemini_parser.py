@@ -9,7 +9,6 @@ from pydantic import ValidationError
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.runnables import RunnableConfig
 
 from ..schemas import BusService
 from ..config import GEMINI_API_KEY, GEMINI_MODEL, TNSTC_DETAILS_URL
@@ -27,7 +26,11 @@ class GeminiParser:
             raise ValueError("GEMINI_API_KEY environment variable is not set. Cannot use GeminiParser.")
         
         try:
-            self.llm = ChatGoogleGenerativeAI(model=GEMINI_MODEL, api_key=GEMINI_API_KEY)
+            self.llm = ChatGoogleGenerativeAI(
+                model=GEMINI_MODEL, 
+                api_key=GEMINI_API_KEY,
+                request_timeout=200.0
+            )
             self.structured_llm = self.llm.with_structured_output(BusService)
         except ImportError:
             log.error("LangChain Google GENAI library not found. Please install 'langchain-google-genai'")
@@ -85,9 +88,7 @@ class GeminiParser:
         ]
         
         try:
-
-            config = RunnableConfig(configurable={"request_timeout": 200.0})
-            service = await self.structured_llm.ainvoke(messages, config=config)
+            service = await self.structured_llm.ainvoke(messages)
 
             if isinstance(service, BusService):
                 return service
@@ -99,7 +100,7 @@ class GeminiParser:
             log.error(f"GeminiParser: Bus {bus_index}: LLM output failed Pydantic validation. Error: {e}")
             raise
         except Exception as e:
-            log.error(f"GeminiParser: Bus {bus_index}: Failed during LangChain invocation. Error: {e}")
+            log.error(f"GeminiParser: Bus {bus_index}: Failed during LangChain invocation: {e}")
             raise
 
     async def _call_load_trip_details(self, client: httpx.AsyncClient, onclick_attr: str) -> str:
