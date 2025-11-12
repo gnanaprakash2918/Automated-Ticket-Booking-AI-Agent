@@ -109,4 +109,7 @@ def filter_bus_services(
             log.warning(f"Error filtering service {service.trip_code}: {e}")
             continue
 
+    if request.limit is not None:
+        return filtered_services[:request.limit]
+
     return filtered_services
