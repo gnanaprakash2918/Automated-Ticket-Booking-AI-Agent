@@ -2,7 +2,6 @@ import httpx
 from typing import List, Optional
 from bs4 import BeautifulSoup
 from pydantic import ValidationError
-import json
 
 from ..schemas import BusService
 import asyncio
@@ -15,6 +14,7 @@ from langchain_ollama import ChatOllama
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from utils.clean_html import minify_html
+from .prompt_builder import PromptGenerator
 
 log = logging.getLogger(__name__)
 
@@ -32,6 +32,8 @@ class OllamaParser:
                 base_url=OLLAMA_BASE_URL
             )
 
+            prompt_gen = PromptGenerator()
+
             self.structured_llm = self.llm.with_structured_output(BusService, method="json_mode")
             log.info(f"OllamaParser initialized. Timeout set to {OLLAMA_LOAD_TIMEOUT}s (from env).")
             
@@ -42,36 +44,7 @@ class OllamaParser:
             log.error(f"Failed to initialize Ollama LLM: {e}")
             raise
         
-        self.system_prompt = f"""
-        You are a strict JSON extraction assistant. Your job is to parse HTML data and produce
-        a *single* JSON object that conforms **exactly** to the provided JSON Schema.
-
-        You will receive two HTML snippets:
-        1. MAIN_LIST_HTML — the summary section from a list page.
-        2. DETAIL_TABLE_HTML — the detailed table of a single bus service.
-
-        You must:
-        1. Return exactly **one valid JSON object** following the JSON_SCHEMA below.
-        2. NEVER include any explanations, markdown, comments, or text — ONLY raw JSON.
-        3. If a field cannot be found, set it to null (or [] if the schema type is array).
-        4. All numeric values must be returned as numbers, not strings.
-        5. Strings like "43 Seats Available" → return 43.
-        6. For via_route: return a JSON array of strings, e.g. ["KARUR", "DINDIGUL"].
-        7. For total_kms: match the schema’s declared type (string or number).
-        8. For time fields, return simple 24-hour strings like "00:05", "06:15".
-        9. Do not hallucinate or infer missing data — use null if unsure.
-        10. Do not invent extra keys or rename fields — follow the schema exactly.
-
-        IMPORTANT:
-        Your output **must** be valid JSON and must pass strict schema validation.
-
-        JSON_SCHEMA:
-        {json.dumps(
-            BusService.model_json_schema() if hasattr(BusService, "model_json_schema") else BusService.schema(),
-            indent=2
-        )}
-        """
-
+        self.system_prompt = prompt_gen.build_system_prompt(BusService)
 
     async def _parse_chunk_with_langchain(
         self,
