@@ -201,8 +201,11 @@ class OllamaParser:
         # 2. Create tasks to parse each bus using the two HTML sources
         tasks = []
         for idx, bus_div in enumerate(bus_divs):
-            main_list_html = minify_html(str(bus_div))
-            detail_table_html = minify_html(str(all_details_html[idx]))
+            main_list_html = re.sub(r"[\r\n]+", "", str(bus_div))
+            detail_table_html = re.sub(r"[\r\n]+", "", str(all_details_html[idx]))
+
+            main_list_html = minify_html(main_list_html)
+            detail_table_html = minify_html(detail_table_html)
             tasks.append(
                 self._wrapper_parse_chunk(
                     semaphore, 
