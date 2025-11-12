@@ -26,6 +26,9 @@ async def get_place_info(client: httpx.AsyncClient, place_name: str, is_from_pla
     action = "LoadFromPlaceList" if is_from_place else "LoadTOPlaceList"
     match_param = "matchStartPlace" if is_from_place else "matchEndPlace"
     data = { "hiddenAction": action, match_param: place_name }
+    
+    place_type = "From" if is_from_place else "To"
+    log.info(f"Attempting {place_type} Place lookup for: '{place_name}'") 
 
     try:
         response = await client.post(TNSTC_BASE_URL, data = data)
@@ -47,6 +50,7 @@ async def get_place_info(client: httpx.AsyncClient, place_name: str, is_from_pla
         raise HTTPException(status_code = status.HTTP_500_INTERNAL_SERVER_ERROR, 
                             detail = f"External API returned invalid place format: {first_match}")
 
+    log.info(f"Place lookup SUCCESS for '{place_name}': ID={parts[0]}, Code={parts[1]}, Name='{parts[2]}'") 
     return PlaceInfo(id = parts[0], code = parts[1], name = parts[2])
 
 
@@ -64,6 +68,8 @@ async def parse_bus_results(
     early, preventing unnecessary sub-requests.
     """
     parser: BusParser = get_parser()
+    
+    log.info(f"Calling bus parser with strategy: {parser.__class__.__name__}. Limit: {limit if limit is not None else 'None'}.") 
     
     try:
         # Pass the limit down to the parser
@@ -92,6 +98,8 @@ def filter_bus_services(
     max_dep_int = int(max_dep_str.replace(':', ''))
     
     allowed_types_lower = {t.lower() for t in request.allowed_bus_types} if request.allowed_bus_types else None
+    
+    log.info(f"Applying filters: Price ({min_price}-{max_price}), Time ({min_dep_str}-{max_dep_str}), Types: {allowed_types_lower if allowed_types_lower else 'All'}") 
 
     for service in bus_list:
         try:
@@ -110,9 +118,11 @@ def filter_bus_services(
 
             if price_ok and time_ok and type_ok:
                 filtered_services.append(service)
+            else:
+                log.debug(f"Service {service.trip_code} filtered out: Price OK={price_ok}, Time OK={time_ok}, Type OK={type_ok}") 
+
         except Exception as e:
             log.warning(f"Error filtering service {service.trip_code}: {e}")
             continue
 
-    # The limit is NO LONGER applied here. It's applied during parsing.
     return filtered_services
