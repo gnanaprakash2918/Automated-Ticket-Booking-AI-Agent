@@ -11,7 +11,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from ..schemas import BusService
-from ..config import GEMINI_API_KEY, GEMINI_MODEL, TNSTC_DETAILS_URL
+from ..config import GEMINI_API_KEY, GEMINI_MODEL, TNSTC_DETAILS_URL, GEMINI_LOAD_TIMEOUT
 
 log = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ class GeminiParser:
             self.llm = ChatGoogleGenerativeAI(
                 model=GEMINI_MODEL, 
                 api_key=GEMINI_API_KEY,
-                request_timeout=200.0
+                request_timeout=GEMINI_LOAD_TIMEOUT
             )
             self.structured_llm = self.llm.with_structured_output(BusService)
         except ImportError:

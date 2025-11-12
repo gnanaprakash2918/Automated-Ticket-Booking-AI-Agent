@@ -26,3 +26,4 @@ OLLAMA_API_URL: str = f"{OLLAMA_BASE_URL}/api/generate"
 OLLAMA_CONCURRENCY_LIMIT: int = int(os.getenv("OLLAMA_CONCURRENCY_LIMIT", "5"))
 
 OLLAMA_LOAD_TIMEOUT: int = int(os.getenv("OLLAMA_LOAD_TIMEOUT", "200"))
+GEMINI_LOAD_TIMEOUT: int = int(os.getenv("GEMINI_LOAD_TIMEOUT", "200"))
