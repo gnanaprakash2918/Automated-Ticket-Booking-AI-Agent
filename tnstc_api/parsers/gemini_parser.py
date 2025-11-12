@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from ..schemas import BusService
+from ..schemas import BusService, BusServiceWithReasoning
 from ..config import GEMINI_API_KEY, GEMINI_MODEL, TNSTC_DETAILS_URL, GEMINI_LOAD_TIMEOUT
 
 log = logging.getLogger(__name__)
@@ -31,7 +31,8 @@ class GeminiParser:
                 api_key=GEMINI_API_KEY,
                 request_timeout=GEMINI_LOAD_TIMEOUT
             )
-            self.structured_llm = self.llm.with_structured_output(BusService)
+
+            self.structured_llm = self.llm.with_structured_output(BusServiceWithReasoning)
         except ImportError:
             log.error("LangChain Google GENAI library not found. Please install 'langchain-google-genai'")
             raise
@@ -41,7 +42,7 @@ class GeminiParser:
         
         self.system_prompt = f"""
         You are an expert, automated HTML parsing engine. Your sole task is to extract
-        bus service details from the provided HTML content.
+        bus service details from the provided HTML content and return a JSON object.
 
         - You will be given two HTML snippets:
           1. `MAIN_LIST_HTML`: The summary div from the search results.
@@ -49,6 +50,9 @@ class GeminiParser:
         - **Prioritize data from `DETAIL_TABLE_HTML`** as it is more accurate.
         - Use `MAIN_LIST_HTML` as a *fallback* for fields not present in the detail
           table (like 'bus_type', 'seats_available', 'via_route').
+
+        - **PRIORITY RULE:** Prioritize data from `DETAIL_TABLE_HTML`. Use `MAIN_LIST_HTML` only as a fallback.
+        - **REASONING RULE:** You MUST populate the `llm_reasoning` field with a concise, step-by-step summary of where you found the Price, Duration, Bus Type, and Seats Available.
         """
             
     async def _parse_bus_with_langchain(
@@ -58,13 +62,14 @@ class GeminiParser:
         bus_index: int
     ) -> Optional[BusService]:
         """
-        Parses a single bus by sending its two HTML sources to Gemini
-        using LangChain's structured output. This method is retryable via tenacity.
+        Parses a single bus by sending its two HTML sources to Gemini.
+        Returns the clean BusService object (without reasoning field).
         """
         user_prompt = f"""
         Please extract all bus service details from the following HTML snippets.
         Prioritize `DETAIL_TABLE_HTML` and use `MAIN_LIST_HTML` as a fallback.
 
+        
         MAIN_LIST_HTML (Fallback):
         {main_list_html}
         
@@ -90,17 +95,21 @@ class GeminiParser:
                 log.info(f"LLM_Parser Bus {bus_index} (Attempt {attempt.retry_state.attempt_number}): Sending HTML (Main: {len(main_list_html)} chars, Detail: {len(detail_table_html)} chars) to LLM for structured extraction.") 
                 
                 try:
-                    service = await self.structured_llm.ainvoke(messages)
+                    service_with_reasoning = await self.structured_llm.ainvoke(messages)
 
-                    if isinstance(service, BusService):
-                        log.info(f"LLM_Parser Bus {bus_index} SUCCESS: Extracted details for '{service.operator}' (Price: {service.price_in_rs}, Trip: {service.trip_code}).") 
-                        return service
+                    if isinstance(service_with_reasoning, BusServiceWithReasoning):
+                        
+                        log.info(f"LLM_Parser Bus {bus_index} SUCCESS: Extracted details for '{service_with_reasoning.operator}' (Price: {service_with_reasoning.price_in_rs}, Trip: {service_with_reasoning.trip_code}).") 
+                        if service_with_reasoning.llm_reasoning:
+                            log.info(f"LLM Reasoning for Bus {bus_index}: {service_with_reasoning.llm_reasoning}")
+                        
+                        return BusService.model_validate(service_with_reasoning.model_dump())
                     else:
-                        log.error(f"GeminiParser: Bus {bus_index}: LangChain returned unexpected type: {type(service)}")
+                        log.error(f"GeminiParser: Bus {bus_index}: LangChain returned unexpected type: {type(service_with_reasoning)}")
                         raise TypeError("LLM returned wrong type")
                 
                 except ValidationError as e:
-                    log.error(f"LLM_Parser Bus {bus_index}: Pydantic validation failed. Input: '{user_prompt[:50]}...'. Error: {e}", exc_info=True) 
+                    log.error(f"LLM_Parser Bus {bus_index}: Pydantic validation failed. Input: '{user_prompt[:50]}...'. Error: {e}", exc_info=True)
                     raise
                 except Exception as e:
                     log.error(f"GeminiParser: Bus {bus_index}: Failed during LangChain invocation: {e}")
@@ -136,8 +145,6 @@ class GeminiParser:
         """
         Parses the main HTML by finding each bus, triggering its detail
         sub-request, and then parsing each bus individually using Gemini.
-        
-        If 'limit' is provided, it will only process the first 'n' buses.
         """
         log.info(f"Using GeminiParser to parse bus results (LangChain strategy)...")
         
@@ -159,14 +166,14 @@ class GeminiParser:
             onclick_attr = a_tag.get("onclick", "") if a_tag else ""
 
             if onclick_attr:
-                detail_tasks.append(self._call_load_trip_details(client, str(onclick_attr), idx)) # ADDED IDX
+                detail_tasks.append(self._call_load_trip_details(client, str(onclick_attr), idx))
             else:
                 future = asyncio.Future()
                 future.set_result("")
                 detail_tasks.append(future)
                 log.warning(f"GeminiParser Bus {idx}: No 'onclick' attribute found. Cannot fetch details.")
 
-        log.info(f"GeminiParser: Awaiting concurrent detail fetch for {len(detail_tasks)} buses...") 
+        log.info(f"GeminiParser: Awaiting concurrent detail fetch for {len(detail_tasks)} buses...")
         all_details_html = await asyncio.gather(*detail_tasks)
 
         # 2. Create tasks to parse each bus using the two HTML sources
@@ -184,7 +191,7 @@ class GeminiParser:
             )
         
         # 3. Gather all parsing results
-        log.info(f"GeminiParser: Awaiting concurrent LLM parsing for {len(parsing_tasks)} buses...") 
+        log.info(f"GeminiParser: Awaiting concurrent LLM parsing for {len(parsing_tasks)} buses...")
         results = await asyncio.gather(*parsing_tasks, return_exceptions=True)
         
         bus_services: List[BusService] = []

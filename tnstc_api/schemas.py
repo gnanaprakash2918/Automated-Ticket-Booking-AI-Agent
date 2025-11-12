@@ -259,3 +259,13 @@ class BusSearchResponse(BaseModel):
             ]
         }
     }
+
+class BusServiceWithReasoning(BusService):
+    """
+    Temporary schema used by the LLM to include its reasoning.
+    Inherits all fields and validators from BusService.
+    """
+    llm_reasoning: Optional[str] = Field(
+        default=None, 
+        description="A concise summary of the LLM's decision-making process, including the source (Detail/Main HTML) for Price, Duration, Bus Type, and Seats."
+    )
