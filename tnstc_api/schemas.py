@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional, List
+from typing import Optional, List, Type, Dict, Any
 from datetime import datetime
 import re
 
@@ -225,3 +225,93 @@ class BusSearchResponse(BaseModel):
             ]
         }
     }
+
+# Structured LLM Output
+
+class BusServiceList(BaseModel):
+    """A container model to ask the LLM for a list of bus services."""
+    services: List[BusService] = Field(default_factory=list, description="A list of all bus services found on the page.")
+
+# Gemini Schema Conversion Utility
+
+def _resolve_schema_refs(schema: Dict[str, Any], definitions: Dict[str, Any]) -> Dict[str, Any]:
+    """Recursively resolves $ref pointers in a JSON schema."""
+    if "$ref" in schema:
+        ref_key = schema["$ref"].split('/')[-1]
+        ref_schema = definitions.get(ref_key, {})
+        return _resolve_schema_refs(ref_schema, definitions)
+    
+    if "properties" in schema:
+        schema["properties"] = {
+            k: _resolve_schema_refs(v, definitions) for k, v in schema["properties"].items()
+        }
+    
+    if "items" in schema:
+        schema["items"] = _resolve_schema_refs(schema["items"], definitions)
+        
+    if "anyOf" in schema:
+        schema["anyOf"] = [_resolve_schema_refs(s, definitions) for s in schema["anyOf"]]
+
+    return schema
+
+def _convert_pydantic_to_gemini(p_schema: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Recursively converts a Pydantic JSON schema to the Gemini-compatible format.
+    - Uppercases types (e.g., "string" -> "STRING")
+    - Handles 'anyOf' for Optional types (e.g., Optional[str])
+    """
+    g_schema = {}
+    
+    if "description" in p_schema:
+        g_schema["description"] = p_schema["description"]
+
+    if "anyOf" in p_schema:
+        non_null_schema = next((s for s in p_schema["anyOf"] if s.get("type") != "null"), None)
+        if non_null_schema:
+            g_schema = _convert_pydantic_to_gemini(non_null_schema)
+            g_schema["nullable"] = True
+            return g_schema
+        else:
+            g_schema["type"] = "STRING"
+            return g_schema
+
+    p_type = p_schema.get("type")
+    
+    if p_type == "object":
+        g_schema["type"] = "OBJECT"
+        g_schema["properties"] = {
+            k: _convert_pydantic_to_gemini(v) for k, v in p_schema.get("properties", {}).items()
+        }
+        if "required" in p_schema:
+            g_schema["required"] = p_schema["required"]
+    elif p_type == "array":
+        g_schema["type"] = "ARRAY"
+        g_schema["items"] = _convert_pydantic_to_gemini(p_schema.get("items", {}))
+    elif p_type == "string":
+        g_schema["type"] = "STRING"
+        if "enum" in p_schema:
+            g_schema["enum"] = p_schema["enum"]
+    elif p_type == "integer":
+        g_schema["type"] = "INTEGER"
+    elif p_type == "number":
+        g_schema["type"] = "NUMBER"
+    elif p_type == "boolean":
+        g_schema["type"] = "BOOLEAN"
+    else:
+        g_schema["type"] = "STRING"
+
+    return g_schema
+
+def get_gemini_schema_for(model: Type[BaseModel]) -> Dict[str, Any]:
+    """
+    Generates a Gemini-compatible, $ref-resolved JSON schema for a Pydantic model.
+    """
+    pydantic_schema = model.model_json_schema()
+    
+    definitions = pydantic_schema.get("$defs", {})
+    resolved_schema = _resolve_schema_refs(pydantic_schema, definitions)
+
+    root_properties = resolved_schema.get("properties", {})
+    gemini_schema = _convert_pydantic_to_gemini({"type": "object", "properties": root_properties})
+    
+    return gemini_schema
