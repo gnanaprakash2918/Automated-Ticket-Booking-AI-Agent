@@ -6,7 +6,7 @@ from ..schemas import BusService
 import asyncio
 import logging
 import re
-from ..config import OLLAMA_MODEL, OLLAMA_CONCURRENCY_LIMIT, TNSTC_DETAILS_URL, OLLAMA_BASE_URL
+from ..config import OLLAMA_MODEL, OLLAMA_CONCURRENCY_LIMIT, TNSTC_DETAILS_URL, OLLAMA_BASE_URL, OLLAMA_LOAD_TIMEOUT
 from tenacity import retry, wait_exponential, stop_after_attempt
 
 from langchain_ollama import ChatOllama
@@ -23,10 +23,15 @@ class OllamaParser:
     def __init__(self):
         
         try:
-            self.llm = ChatOllama(model=OLLAMA_MODEL, base_url=OLLAMA_BASE_URL)
+            self.llm = ChatOllama(
+                model=OLLAMA_MODEL, 
+                base_url=OLLAMA_BASE_URL
+            )
             self.structured_llm = self.llm.with_structured_output(BusService, method="json_mode")
+            log.info(f"OllamaParser initialized. Timeout set to {OLLAMA_LOAD_TIMEOUT}s (from env).")
+            
         except ImportError:
-            log.error("LangChain Community library not found. Please install 'langchain-community'")
+            log.error("LangChain Ollama library not found. Please install 'langchain-ollama'")
             raise
         except Exception as e:
             log.error(f"Failed to initialize Ollama LLM: {e}")
@@ -50,8 +55,7 @@ class OllamaParser:
         reraise=True
     )
     async def _parse_chunk_with_langchain(
-        self, 
-        client: httpx.AsyncClient, # client is no longer used for LLM
+        self,
         main_list_html: str,
         detail_table_html: str,
         bus_index: int
@@ -81,10 +85,7 @@ class OllamaParser:
         ]
 
         try:
-            from langchain_core.runnables import RunnableConfig
-
-            config = RunnableConfig(configurable={"request_timeout": 200.0})
-            service = await self.structured_llm.ainvoke(messages, config=config)
+            service = await self.structured_llm.ainvoke(messages)
 
             if isinstance(service, BusService):
                 return service
@@ -96,13 +97,12 @@ class OllamaParser:
             log.error(f"OllamaParser: Bus {bus_index}: LLM output failed Pydantic validation: {e}")
             raise
         except Exception as e:
-            log.error(f"OllamaParser: Bus {bus_index}: Failed during LangChain invocation: {e}")
+            log.error(f"OLLAMA_LOAD_TIMEOUT may be too low. Error during LangChain invocation: {e}")
             raise
 
     async def _wrapper_parse_chunk(
             self, 
             semaphore: asyncio.Semaphore, 
-            client: httpx.AsyncClient, 
             main_list_html: str, 
             detail_table_html: str,
             idx: int
@@ -115,7 +115,6 @@ class OllamaParser:
                 log.debug(f"OllamaParser: [Semaphore Acquired] Parsing chunk {idx}...")
                 try:
                     return await self._parse_chunk_with_langchain(
-                        client, 
                         main_list_html, 
                         detail_table_html, 
                         idx
@@ -193,7 +192,6 @@ class OllamaParser:
             tasks.append(
                 self._wrapper_parse_chunk(
                     semaphore, 
-                    client, 
                     main_list_html, 
                     detail_table_html, 
                     idx
