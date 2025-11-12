@@ -2,6 +2,7 @@ import httpx
 from typing import List, Optional
 from bs4 import BeautifulSoup
 from pydantic import ValidationError
+import json
 
 from ..schemas import BusService
 import asyncio
@@ -42,16 +43,35 @@ class OllamaParser:
             raise
         
         self.system_prompt = f"""
-        You are an expert HTML parsing assistant. Your task is to extract data from
-        two given HTML chunks that represent a *single* bus service.
+        You are a strict JSON extraction assistant. Your job is to parse HTML data and produce
+        a *single* JSON object that conforms **exactly** to the provided JSON Schema.
 
-        - `MAIN_LIST_HTML`: The summary div from the search results.
-        - `DETAIL_TABLE_HTML`: The more detailed HTML from a sub-request.
-        
-        **Prioritize data from `DETAIL_TABLE_HTML`** as it is more accurate.
-        Use `MAIN_LIST_HTML` as a *fallback* for fields not present in the detail
-        table (like 'bus_type', 'seats_available', 'via_route').
+        You will receive two HTML snippets:
+        1. MAIN_LIST_HTML — the summary section from a list page.
+        2. DETAIL_TABLE_HTML — the detailed table of a single bus service.
+
+        You must:
+        1. Return exactly **one valid JSON object** following the JSON_SCHEMA below.
+        2. NEVER include any explanations, markdown, comments, or text — ONLY raw JSON.
+        3. If a field cannot be found, set it to null (or [] if the schema type is array).
+        4. All numeric values must be returned as numbers, not strings.
+        5. Strings like "43 Seats Available" → return 43.
+        6. For via_route: return a JSON array of strings, e.g. ["KARUR", "DINDIGUL"].
+        7. For total_kms: match the schema’s declared type (string or number).
+        8. For time fields, return simple 24-hour strings like "00:05", "06:15".
+        9. Do not hallucinate or infer missing data — use null if unsure.
+        10. Do not invent extra keys or rename fields — follow the schema exactly.
+
+        IMPORTANT:
+        Your output **must** be valid JSON and must pass strict schema validation.
+
+        JSON_SCHEMA:
+        {json.dumps(
+            BusService.model_json_schema() if hasattr(BusService, "model_json_schema") else BusService.schema(),
+            indent=2
+        )}
         """
+
 
     async def _parse_chunk_with_langchain(
         self,
@@ -65,16 +85,22 @@ class OllamaParser:
         """
         
         user_prompt = f"""
-        Please extract all available data from the HTML chunks below.
-        Prioritize `DETAIL_TABLE_HTML` and use `MAIN_LIST_HTML` as a fallback.
-
-        MAIN_LIST_HTML (Fallback):
+        MAIN_LIST_HTML (Fallback Source):
         {main_list_html}
 
         ---
 
         DETAIL_TABLE_HTML (Primary Source):
         {detail_table_html}
+
+        TASK:
+        Extract every available field defined in the JSON_SCHEMA from these HTML fragments.
+        Prioritize DETAIL_TABLE_HTML for accuracy and use MAIN_LIST_HTML only if a field is missing.
+
+        Return:
+        → A single JSON object that conforms exactly to the JSON_SCHEMA provided in the system prompt.
+        → Do not include any extra text, comments, or markdown.
+        → Output strictly raw JSON.
         """
         
         messages = [
