@@ -8,12 +8,11 @@ from fastapi import FastAPI, HTTPException
 from .schemas import SearchRequest, BusSearchResponse
 import asyncio
 import logging
-import os
 from utils.logging_setup import setup_logging
+from .config import TNSTC_BASE_URL
 
 setup_logging()
 log = logging.getLogger(__name__)
-
 
 # Initialize FastAPI App
 app = FastAPI(
@@ -22,15 +21,21 @@ app = FastAPI(
     version = "1.0.0",
 )
 
-FRONTEND_ORIGINS = os.getenv('FRONTEND_ORIGINS', 'http://localhost:3000,*').split(',')
+DEVELOPMENT_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "*"
+]
 
 app.add_middleware(
     CORSMiddleware,
     allow_credentials = True,
     allow_methods = ['GET', 'POST'],
     allow_headers = ['*'],
-    allow_origins = FRONTEND_ORIGINS,
+    allow_origins = DEVELOPMENT_ORIGINS,
 )
+
+# Endpoints
 
 @app.get('/', tags = ['Health'])
 async def check_health():
@@ -40,8 +45,6 @@ async def check_health():
         "status" : "ok",
         "message" : "TNSTC API Wrapper is running."
     }
-
-BASE_URL = "https://www.tnstc.in/OTRSOnline/jqreq.do?"
 
 @app.post("/search_buses", response_model=BusSearchResponse, status_code=status.HTTP_200_OK) 
 async def search_buses(request: SearchRequest):
@@ -83,11 +86,6 @@ async def search_buses(request: SearchRequest):
             'languageType': 'E',
             'checkSingleLady': 'N',
 
-            # 'hiddenCurrentDate': '09/11/2025', 
-            # 'hiddenMaxNoOfPassengers': '16',
-            # 'hiddenMaxValidReservDate': '9/12/2025',
-            # 'hiddenUserType': 'G',
-
             # Include other necessary but empty fields
             'selectOnwardTimeSlab': '', 'hiddenTotalMales': '', 'txtAdultMales': '', 'txtChildMales': '',
             'txtAdultFemales': '', 'txtChildFemales': '', 'hiddenTotalFemales': '', 'selectClass': '',
@@ -98,7 +96,7 @@ async def search_buses(request: SearchRequest):
         }
 
         try:
-            final_url = BASE_URL + "hiddenAction=SearchService"
+            final_url = TNSTC_BASE_URL + "hiddenAction=SearchService"
             response = await client.post(final_url, data=payload)
             response.raise_for_status()
 
@@ -129,4 +127,3 @@ async def search_buses(request: SearchRequest):
 
 if __name__ == "__main__":
     uvicorn.run("tnstc_api.main:app", host="localhost", port=9000, reload=True)
-    # uvicorn.run('main:app', host=os.getenv('HOST', '0.0.0.0'), port=int(os.getenv('PORT', '9000')), reload=(os.getenv('RELOAD','false').lower()=='true'))

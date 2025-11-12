@@ -4,6 +4,7 @@ from typing import Literal, Optional
 
 load_dotenv()
 
+# "production" in your deployment environment
 APP_ENV: str = os.getenv("APP_ENV", "development")
 
 LOG_DIR: str = "logs"
