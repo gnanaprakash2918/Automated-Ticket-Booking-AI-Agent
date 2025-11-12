@@ -2,7 +2,7 @@ import httpx
 from typing import List, Optional
 from bs4 import BeautifulSoup
 from pydantic import ValidationError
-from ..schemas import BusService
+from ..schemas import BusService, BusServiceWithReasoning
 import asyncio
 import logging
 import re
@@ -27,8 +27,7 @@ class OllamaParser:
                 model=OLLAMA_MODEL, 
                 base_url=OLLAMA_BASE_URL
             )
-
-            self.structured_llm = self.llm.with_structured_output(BusService, method="json_mode")
+            self.structured_llm = self.llm.with_structured_output(BusServiceWithReasoning, method="json_mode")
             log.info(f"OllamaParser initialized. Timeout set to {OLLAMA_LOAD_TIMEOUT}s (from env).")
             
         except ImportError:
@@ -39,15 +38,18 @@ class OllamaParser:
             raise
         
         self.system_prompt = f"""
-        You are an expert HTML parsing assistant. Your task is to extract data from
-        two given HTML chunks that represent a *single* bus service.
+        You are an expert, automated HTML parsing engine. Your sole task is to extract
+        bus service details from the provided HTML content and return a JSON object.
 
-        - `MAIN_LIST_HTML`: The summary div from the search results.
-        - `DETAIL_TABLE_HTML`: The more detailed HTML from a sub-request.
-        
-        **Prioritize data from `DETAIL_TABLE_HTML`** as it is more accurate.
-        Use `MAIN_LIST_HTML` as a *fallback* for fields not present in the detail
-        table (like 'bus_type', 'seats_available', 'via_route').
+        - You will be given two HTML snippets:
+          1. `MAIN_LIST_HTML`: The summary div from the search results.
+          2. `DETAIL_TABLE_HTML`: The more detailed HTML from a sub-request.
+        - **Prioritize data from `DETAIL_TABLE_HTML`** as it is more accurate.
+        - Use `MAIN_LIST_HTML` as a *fallback* for fields not present in the detail
+          table (like 'bus_type', 'seats_available', 'via_route').
+
+        - **PRIORITY RULE:** Prioritize data from `DETAIL_TABLE_HTML`. Use `MAIN_LIST_HTML` only as a fallback.
+        - **REASONING RULE:** You MUST populate the `llm_reasoning` field with a concise, step-by-step summary of where you found the Price, Duration, Bus Type, and Seats Available.
         """
 
     async def _parse_chunk_with_langchain(
@@ -57,17 +59,18 @@ class OllamaParser:
         bus_index: int
     ) -> Optional[BusService]:
         """
-        Sends a single HTML chunk to the Ollama API for parsing and validation
-        using LangChain's structured output. This method is retryable via tenacity.
+        Sends a single HTML chunk to the Ollama API for parsing and validation.
+        Returns the clean BusService object (without reasoning field).
         """
         
         user_prompt = f"""
-        Please extract all available data from the HTML chunks below.
+        Please extract all bus service details from the following HTML snippets.
         Prioritize `DETAIL_TABLE_HTML` and use `MAIN_LIST_HTML` as a fallback.
 
+        
         MAIN_LIST_HTML (Fallback):
         {main_list_html}
-
+        
         ---
 
         DETAIL_TABLE_HTML (Primary Source):
@@ -87,20 +90,24 @@ class OllamaParser:
 
         for attempt in retry_config:
             with attempt:
-                log.info(f"LLM_Parser Bus {bus_index} (Attempt {attempt.retry_state.attempt_number}): Sending HTML (Main: {len(main_list_html)} chars, Detail: {len(detail_table_html)} chars) to LLM for structured extraction.") 
+                log.info(f"LLM_Parser Bus {bus_index} (Attempt {attempt.retry_state.attempt_number}): Sending HTML (Main: {len(main_list_html)} chars, Detail: {len(detail_table_html)} chars) to LLM for structured extraction.")
 
                 try:
-                    service = await self.structured_llm.ainvoke(messages)
+                    service_with_reasoning = await self.structured_llm.ainvoke(messages)
 
-                    if isinstance(service, BusService):
-                        log.info(f"LLM_Parser Bus {bus_index} SUCCESS: Extracted details for '{service.operator}' (Price: {service.price_in_rs}, Trip: {service.trip_code}).") 
-                        return service
+                    if isinstance(service_with_reasoning, BusServiceWithReasoning):
+                        
+                        log.info(f"LLM_Parser Bus {bus_index} SUCCESS: Extracted details for '{service_with_reasoning.operator}' (Price: {service_with_reasoning.price_in_rs}, Trip: {service_with_reasoning.trip_code}).") 
+                        if service_with_reasoning.llm_reasoning:
+                            log.info(f"LLM Reasoning for Bus {bus_index}: {service_with_reasoning.llm_reasoning}")
+                        
+                        return BusService.model_validate(service_with_reasoning.model_dump())
                     else:
-                        log.error(f"OllamaParser: Bus {bus_index}: LangChain returned unexpected type: {type(service)}")
+                        log.error(f"OllamaParser: Bus {bus_index}: LangChain returned unexpected type: {type(service_with_reasoning)}")
                         raise TypeError("LLM returned wrong type")
 
                 except ValidationError as e:
-                    log.error(f"LLM_Parser Bus {bus_index}: Pydantic validation failed. Input: '{user_prompt[:50]}...'. Error: {e}", exc_info=True) 
+                    log.error(f"LLM_Parser Bus {bus_index}: Pydantic validation failed. Input: '{user_prompt[:50]}...'. Error: {e}", exc_info=True)
                     raise
                 except Exception as e:
                     log.error(f"OLLAMA_LOAD_TIMEOUT may be too low. Error during LangChain invocation: {e}")
@@ -118,9 +125,9 @@ class OllamaParser:
             A wrapper that acquires the semaphore before calling the
             parsing function.
             """
-            log.debug(f"OllamaParser: [SEMAPHORE WAITING] for bus {idx}...") 
+            log.debug(f"OllamaParser: [SEMAPHORE WAITING] for bus {idx}...")
             async with semaphore:
-                log.info(f"OllamaParser: [SEMAPHORE ACQUIRED] Bus {idx}. Remaining slots: {semaphore._value}") 
+                log.info(f"OllamaParser: [SEMAPHORE ACQUIRED] Bus {idx}. Remaining slots: {semaphore._value}")
                 try:
                     return await self._parse_chunk_with_langchain(
                         main_list_html, 
@@ -128,7 +135,7 @@ class OllamaParser:
                         idx
                     )
                 finally:
-                    log.debug(f"OllamaParser: [SEMAPHORE RELEASED] Finished chunk {idx}.") 
+                    log.debug(f"OllamaParser: [SEMAPHORE RELEASED] Finished chunk {idx}.")
 
     async def _call_load_trip_details(self, client: httpx.AsyncClient, onclick_attr: str, bus_index: int) -> str:
         """Extracts arguments and calls the LoadTripDetails endpoint."""
@@ -159,8 +166,6 @@ class OllamaParser:
         """
         Parses the main HTML by finding each bus, triggering its detail
         sub-request, and then parsing each bus individually using Ollama.
-        
-        If 'limit' is provided, it will only process the first 'n' buses.
         """
         
         log.info(f"Using OllamaParser with model {OLLAMA_MODEL} (LangChain strategy)...")
@@ -192,7 +197,7 @@ class OllamaParser:
                 detail_tasks.append(future)
                 log.warning(f"OllamaParser Bus {idx}: No 'onclick' attribute found. Cannot fetch details.")
         
-        log.info(f"OllamaParser: Awaiting concurrent detail fetch for {len(detail_tasks)} buses...") 
+        log.info(f"OllamaParser: Awaiting concurrent detail fetch for {len(detail_tasks)} buses...")
         all_details_html = await asyncio.gather(*detail_tasks)
 
         # 2. Create tasks to parse each bus using the two HTML sources
@@ -209,7 +214,7 @@ class OllamaParser:
                 )
             )
         
-        log.info(f"OllamaParser: Awaiting concurrent LLM parsing for {len(tasks)} buses...") 
+        log.info(f"OllamaParser: Awaiting concurrent LLM parsing for {len(tasks)} buses...")
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
         bus_services: List[BusService] = []
