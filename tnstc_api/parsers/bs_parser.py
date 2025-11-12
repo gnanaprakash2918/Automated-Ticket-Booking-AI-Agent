@@ -35,6 +35,8 @@ class BeautifulSoupParser:
         detail_tasks = []
         temp_data_list = []
         bus_divs = soup.find_all('div', class_ = 'bus-list')
+        
+        log.info(f"BeautifulSoupParser: Starting hybrid parse. Found {len(bus_divs)} bus elements.")
 
         if limit is not None:
             log.info(f"BeautifulSoupParser: Applying limit of {limit} buses.")
@@ -54,10 +56,14 @@ class BeautifulSoupParser:
 
                 # 2. Add task to get detailed HTML
                 if onclick_attr:
-                    detail_tasks.append(self._call_load_trip_details(client, str(onclick_attr)))
+                    detail_tasks.append(self._call_load_trip_details(client, str(onclick_attr), idx))
+                    log.debug(f"BS_Parser Bus {idx}: Extracted {len(re.findall(r"'([^']*)'", str(onclick_attr)))} trip detail call arguments from onclick: {onclick_attr[:50]}...") # VERBOSE LOGGING
                 else:
-                    detail_tasks.append(asyncio.sleep(0, result="")) 
-
+                    future = asyncio.Future()
+                    future.set_result("")
+                    detail_tasks.append(future)
+                    log.warning(f"BS_Parser Bus {idx}: No 'onclick' attribute found. Cannot fetch details.")
+                    
                 temp_data_list.append({
                     "bus_type": bus_type,
                     "seats_available": seats_available,
@@ -66,10 +72,13 @@ class BeautifulSoupParser:
                 
             except Exception as e:
                 log.error(f"Critical error in bs_parser (Pass 1) for bus {idx}: {e}")
-                detail_tasks.append(asyncio.sleep(0, result=""))
+                future = asyncio.Future()
+                future.set_result("")
+                detail_tasks.append(future)
                 temp_data_list.append(None)
 
         # 3. Run all detail tasks in parallel
+        log.info(f"BeautifulSoupParser: Awaiting concurrent detail fetch for {len(detail_tasks)} buses...")
         all_details_html = await asyncio.gather(*detail_tasks)
 
         # 4. Combine main list data with detail data using the new hybrid logic
@@ -95,6 +104,8 @@ class BeautifulSoupParser:
                     'price_in_rs': fallback_data.get('price_in_rs', 0)
                 }
                 
+                log.debug(f"BS_Parser Bus {idx}: Fallback Price: {fallback_data.get('price_in_rs')}, Trip Code: {fallback_data.get('trip_code')}")
+
                 total_kms = None
                 child_fare = None
 
@@ -111,6 +122,8 @@ class BeautifulSoupParser:
                     
                     total_kms = parsed_details.get('total_kms')
                     child_fare = parsed_details.get('child_fare', "NA")
+                
+                log.info(f"BS_Parser Bus {idx} MERGED: Operator: {service_data['operator']}, Trip Code: {service_data['trip_code']}, Final Price: {service_data['price_in_rs']}")
 
                 # 5. Append the final merged object
                 bus_services.append(BusService(
@@ -163,9 +176,10 @@ class BeautifulSoupParser:
                     route_string = via_text.replace('Via-', '').strip()
                     if route_string: 
                         via_route_list = [stop.strip() for stop in route_string.split(',') if stop.strip()]
+                        log.debug(f"BS_Parser: Extracted via route: {via_route_list}")
         return via_route_list
 
-    async def _call_load_trip_details(self, client: httpx.AsyncClient, onclick_attr: str) -> str:
+    async def _call_load_trip_details(self, client: httpx.AsyncClient, onclick_attr: str, bus_index: int) -> str:
         """Extracts arguments and calls the LoadTripDetails endpoint."""
         args = re.findall(r"'([^']*)'", str(onclick_attr))
         if len(args) < 6:
@@ -182,7 +196,7 @@ class BeautifulSoupParser:
             response.raise_for_status()
             return response.text
         except httpx.RequestError as e:
-            log.error(f"Network error calling loadTripDetails: {e}")
+            log.error(f"Network error calling loadTripDetails for bus {bus_index}: {e}")
             return ""
 
     def _parse_details_from_trip_html(self, trip_html: str) -> Optional[Dict[str, Any]]:
