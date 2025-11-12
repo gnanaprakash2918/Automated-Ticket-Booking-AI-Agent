@@ -12,3 +12,4 @@ async-lru
 tenacity
 langchain-community
 langchain-google-genai
+langchain-ollama

@@ -9,7 +9,7 @@ import re
 from ..config import OLLAMA_MODEL, OLLAMA_CONCURRENCY_LIMIT, TNSTC_DETAILS_URL, OLLAMA_BASE_URL
 from tenacity import retry, wait_exponential, stop_after_attempt
 
-from langchain_community.chat_models import ChatOllama
+from langchain_ollama import ChatOllama
 from langchain_core.messages import HumanMessage, SystemMessage
 
 log = logging.getLogger(__name__)

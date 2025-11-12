@@ -5,12 +5,13 @@ import logging
 import uvicorn
 import httpx
 from fastapi import FastAPI, HTTPException
-from .schemas import SearchRequest, BusSearchResponse
+from .schemas import SearchRequest, BusSearchResponse, ResponseMetadata
 import asyncio
 import logging
 from utils.logging_setup import setup_logging
-from .config import TNSTC_BASE_URL
+from .config import TNSTC_BASE_URL, PARSER_STRATEGY
 from typing import Optional
+from datetime import datetime
 
 setup_logging()
 log = logging.getLogger(__name__)
@@ -60,6 +61,8 @@ async def search_buses(
     """
     Performs the full, multi-step bus search against the external TNSTC API, and then filters the results.
     """
+
+    search_time = datetime.now()
 
     async with httpx.AsyncClient(timeout=30.0) as client:        
         try:
@@ -111,20 +114,27 @@ async def search_buses(
 
             bus_list = await parse_bus_results(client, response.text, limit)
             
+            total_found = len(bus_list)
+            
             filtered_bus_list = filter_bus_services(bus_list, request) 
             
             if not filtered_bus_list:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, 
                                     detail="No bus services found matching the specified route, date, and filters.")
+                        
+            # 1. Create the metadata object
+            metadata_obj = ResponseMetadata(
+                search_timestamp=search_time,
+                parser_strategy=PARSER_STRATEGY,
+                total_services_found_before_filtering=total_found,
+                limit_applied=limit
+            )
             
-            # Construct and return the new response object with IDs and Codes
+            # 2. Construct and return the final response
             return BusSearchResponse(
-                from_place_name=from_place.name,
-                from_place_id=from_place.id,
-                from_place_code=from_place.code,
-                to_place_name=to_place.name,
-                to_place_id=to_place.id,
-                to_place_code=to_place.code,
+                metadata=metadata_obj,
+                from_place=from_place,
+                to_place=to_place,
                 services=filtered_bus_list
             )
 

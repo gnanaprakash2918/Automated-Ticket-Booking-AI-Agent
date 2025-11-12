@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, computed_field
 from typing import Optional, List
 from datetime import datetime
 import re
@@ -87,6 +87,7 @@ class BusService(BaseModel):
         Validates duration is positive and normalizes it to a float string.
         Handles both "HH:MM" (e.g., "7:30") and float-string (e.g., "7.45").
         """
+        
         v = v.replace("Hrs", "").strip()
         
         if ':' in v:
@@ -194,29 +195,43 @@ class SearchRequest(BaseModel):
             raise ValueError('price must be non-negative')
         return v
 
+class ResponseMetadata(BaseModel):
+    """Contains metadata about the search request and response."""
+    search_timestamp: datetime = Field(..., description="Timestamp of when the search was executed.")
+    parser_strategy: str = Field(..., description="The parsing strategy used (e.g., 'beautifulsoup', 'gemini').")
+    total_services_found_before_filtering: int = Field(..., description="Total services found before applying filters.")
+    limit_applied: Optional[int] = Field(default=None, description="The 'limit' parameter used for the search, if any.")
+
 
 class BusSearchResponse(BaseModel):
     """
     Final output model for the bus search, including metadata like place names and internal codes.
     """
-    from_place_name: str = Field(..., description="The confirmed starting city name.")
-    from_place_id: str = Field(..., description="Internal ID for the starting place.")
-    from_place_code: str = Field(..., description="Three-letter code for the starting place.")
-    to_place_name: str = Field(..., description="The confirmed destination city name.")
-    to_place_id: str = Field(..., description="Internal ID for the destination place.")
-    to_place_code: str = Field(..., description="Three-letter code for the destination place.")
+    from_place: PlaceInfo = Field(..., description="Details of the confirmed starting place.")
+    to_place: PlaceInfo = Field(..., description="Details of the confirmed destination place.")
     services: List[BusService] = Field(..., description="List of available bus services.")
+    metadata: ResponseMetadata = Field(..., description="Metadata about the search operation.")
+
+    @computed_field
+    @property
+    def services_count_after_filtering(self) -> int:
+        """The total number of services returned in the list after filtering."""
+        return len(self.services)
 
     model_config = {
         "json_schema_extra": {
             "examples": [
                 {
-                    "from_place_name": "DHARMAPURI",
-                    "from_place_id": "488",
-                    "from_place_code": "DHA",
-                    "to_place_name": "CHENNAI-PT DR. M.G.R. BS",
-                    "to_place_id": "275",
-                    "to_place_code": "CHEDD",
+                    "from_place": {
+                        "id": "488",
+                        "code": "DHA",
+                        "name": "DHARMAPURI"
+                    },
+                    "to_place": {
+                        "id": "275",
+                        "code": "CHEDD",
+                        "name": "CHENNAI-PT DR. M.G.R. BS"
+                    },
                     "services": [
                         {
                             "operator": "SALEM",
@@ -232,7 +247,14 @@ class BusSearchResponse(BaseModel):
                             "total_kms": "308.00",
                             "child_fare": "NA"
                         }
-                    ]
+                    ],
+                    "services_count_after_filtering": 1,
+                    "metadata": {
+                        "search_timestamp": "2025-11-12T17:30:00.123456",
+                        "parser_strategy": "beautifulsoup",
+                        "total_services_found_before_filtering": 25,
+                        "limit_applied": 10
+                    },
                 }
             ]
         }
