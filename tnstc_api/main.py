@@ -63,9 +63,11 @@ async def search_buses(
     """
 
     search_time = datetime.now()
+    log.info(f"Received search request: {request.from_place_name} -> {request.to_place_name} on {request.onward_date}")
 
     async with httpx.AsyncClient(timeout=30.0) as client:        
         try:
+            log.info("Starting concurrent place lookups.")
             from_place_task = get_place_info(client, request.from_place_name, is_from_place=True)
             to_place_task = get_place_info(client, request.to_place_name, is_from_place=False)
             
@@ -106,21 +108,27 @@ async def search_buses(
             'txtUserLoginID': '', 'txtPassword': '', 'txtCaptchaCode': '', 'txtRUserLoginID': '',
             'txtRMobileNo': '', 'txtRUserFullName': '', 'txtRPassword': '',
         }
+        
+        log.info(f"Executing external search API call. Payload data keys: {list(payload.keys())[:5]}...")
 
         try:
             final_url = TNSTC_BASE_URL + "hiddenAction=SearchService"
             response = await client.post(final_url, data=payload)
             response.raise_for_status()
+            log.info("External search API call successful. Starting HTML parsing.")
 
             bus_list = await parse_bus_results(client, response.text, limit)
             
             total_found = len(bus_list)
+            log.info(f"Bus parsing complete. Parser found {total_found} services (before filtering).")
             
             filtered_bus_list = filter_bus_services(bus_list, request) 
             
             if not filtered_bus_list:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, 
                                     detail="No bus services found matching the specified route, date, and filters.")
+            
+            log.info(f"Filtering complete. {len(filtered_bus_list)} services remain after applying filters.")
                         
             # 1. Create the metadata object
             metadata_obj = ResponseMetadata(
