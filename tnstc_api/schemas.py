@@ -38,8 +38,10 @@ class BusService(BaseModel):
 
     operator: str = Field(default=..., description="Name of the operating corporation.")
     bus_type: str = Field(default=..., description="Type or class of the bus.")
-    trip_code: str = Field(default=..., description="Unique service code.")
-    route_code: str = Field(default=..., description="TNSTC internal route identifier.")
+    
+    trip_code: str = Field(default="N/A", description="Unique service code.")
+    route_code: str = Field(default="N/A", description="TNSTC internal route identifier.")
+    
     departure_time: str = Field(default=..., description="Scheduled departure time in 24-hour format.")
     arrival_time: str = Field(default=..., description="Scheduled arrival time in 24-hour format.")
     duration: str = Field(default=..., description="Total journey duration in hours, decimal allowed.")
@@ -85,6 +87,8 @@ class BusService(BaseModel):
         Validates duration is positive and normalizes it to a float string.
         Handles both "HH:MM" (e.g., "7:30") and float-string (e.g., "7.45").
         """
+        v = v.replace("Hrs", "").strip()
+        
         if ':' in v:
             # Handle "HH:MM" format from the new parser
             try:

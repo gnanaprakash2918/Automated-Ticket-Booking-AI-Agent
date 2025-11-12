@@ -52,7 +52,7 @@ async def search_buses(
     request: SearchRequest,
     limit: Optional[int] = Query(
         default=None,
-        gt=0, # Ensures the limit, if provided, is a positive number
+        gt=0,
         title="Limit Parsed Results",
         description="Process and return only the first 'n' bus services found."
     )
