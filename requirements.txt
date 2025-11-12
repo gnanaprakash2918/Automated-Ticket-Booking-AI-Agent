@@ -10,3 +10,5 @@ lxml
 rich
 async-lru
 tenacity
+langchain-community
+langchain-google-genai

@@ -1,83 +1,59 @@
 import httpx
 from typing import List, Optional
-import json
 import logging
-from pydantic import ValidationError
 from tenacity import retry, wait_exponential, stop_after_attempt
 import asyncio
 import re
 from bs4 import BeautifulSoup
+from pydantic import ValidationError
 
-from ..schemas import BusService, get_gemini_schema_for
-from ..config import GEMINI_API_KEY, GEMINI_API_URL, TNSTC_DETAILS_URL
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
+
+from ..schemas import BusService
+from ..config import GEMINI_API_KEY, GEMINI_MODEL, TNSTC_DETAILS_URL
 
 log = logging.getLogger(__name__)
 
 class GeminiParser:
     """
-    Implements the BusParser interface using the Gemini API's structured output (JSON mode).
+    Implements the BusParser interface using the LangChain Google Generative AI
+    model with its native structured output feature.
     """
 
     def __init__(self):
         if not GEMINI_API_KEY:
             raise ValueError("GEMINI_API_KEY environment variable is not set. Cannot use GeminiParser.")
         
-        self.api_url = f"{GEMINI_API_URL}?key={GEMINI_API_KEY}"
-        
-        self.service_schema = get_gemini_schema_for(BusService)
+        try:
+            self.llm = ChatGoogleGenerativeAI(model=GEMINI_MODEL, api_key=GEMINI_API_KEY)
+            self.structured_llm = self.llm.with_structured_output(BusService)
+        except ImportError:
+            log.error("LangChain Google GENAI library not found. Please install 'langchain-google-genai'")
+            raise
+        except Exception as e:
+            log.error(f"Failed to initialize Gemini LLM: {e}")
+            raise
         
         self.system_prompt = f"""
         You are an expert, automated HTML parsing engine. Your sole task is to extract
-        bus service details from the provided HTML content and return them as a
-        single, valid JSON object.
+        bus service details from the provided HTML content.
 
         - You will be given two HTML snippets:
           1. `MAIN_LIST_HTML`: The summary div from the search results.
           2. `DETAIL_TABLE_HTML`: The more detailed HTML from a sub-request.
-        - You MUST adhere *strictly* to the provided JSON schema.
         - **Prioritize data from `DETAIL_TABLE_HTML`** as it is more accurate.
         - Use `MAIN_LIST_HTML` as a *fallback* for fields not present in the detail
           table (like 'bus_type', 'seats_available', 'via_route').
-        - Pay close attention to data types (e.g., 'price_in_rs' must be an integer).
-        - Do NOT include any text, explanations, or markdown fences (```json) in your response.
-        - Your entire response must be *only* the JSON object.
         """
-
-    async def _call_gemini_api_internal(
-        self, 
-        client: httpx.AsyncClient, 
-        payload: dict
-    ) -> BusService:
-        """
-        Internal method to call the Gemini API. Not retryable on its own.
-        """
-        log.debug("Calling Gemini API...")
-        
-        response = await client.post(self.api_url, json=payload, timeout=120.0)        
-        response.raise_for_status() 
-        
-        result = response.json()
-
-        try:
-            candidate = result.get('candidates', [])[0]
-            json_text = candidate['content']['parts'][0]['text']
-            
-            data = json.loads(json_text)            
-            return BusService(**data)
-        
-        except (KeyError, IndexError, json.JSONDecodeError) as e:
-            log.error(f"GeminiParser: Failed to parse valid JSON from LLM response. Error: {e}. Response: {result}")
-            raise ValueError(f"Failed to parse LLM JSON response: {e}")
-        except ValidationError as e:
-            log.error(f"GeminiParser: LLM output failed Pydantic validation. Error: {e}. Data: {data}")
-            raise
             
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=60),
         stop=stop_after_attempt(5),
         reraise=True
     )
-    async def _parse_bus_with_gemini(
+    async def _parse_bus_with_langchain(
         self,
         client: httpx.AsyncClient,
         main_list_html: str,
@@ -85,15 +61,14 @@ class GeminiParser:
         bus_index: int
     ) -> Optional[BusService]:
         """
-        Parses a single bus by sending its two HTML sources to Gemini.
-        This method is retryable.
+        Parses a single bus by sending its two HTML sources to Gemini
+        using LangChain's structured output. This method is retryable.
         """
-        log.debug(f"GeminiParser: Parsing bus {bus_index}...")
+        log.debug(f"GeminiParser: Parsing bus {bus_index} with LangChain...")
 
         user_prompt = f"""
         Please extract all bus service details from the following HTML snippets.
         Prioritize `DETAIL_TABLE_HTML` and use `MAIN_LIST_HTML` as a fallback.
-        Return the data as a JSON object matching the system prompt's schema.
 
         MAIN_LIST_HTML (Fallback):
         {main_list_html}
@@ -104,20 +79,27 @@ class GeminiParser:
         {detail_table_html}
         """
 
-        payload = {
-            "contents": [{"parts": [{"text": user_prompt}]}],
-            "systemInstruction": {"parts": [{"text": self.system_prompt}]},
-            "generationConfig": {
-                "responseMimeType": "application/json",
-                "responseSchema": self.service_schema
-            }
-        }
+        messages = [
+            SystemMessage(content=self.system_prompt),
+            HumanMessage(content=user_prompt)
+        ]
         
         try:
-            service = await self._call_gemini_api_internal(client, payload)
-            return service
+
+            config = RunnableConfig(configurable={"request_timeout": 200.0})
+            service = await self.structured_llm.ainvoke(messages, config=config)
+
+            if isinstance(service, BusService):
+                return service
+            else:
+                log.error(f"GeminiParser: Bus {bus_index}: LangChain returned unexpected type: {type(service)}")
+                return None
+        
+        except ValidationError as e:
+            log.error(f"GeminiParser: Bus {bus_index}: LLM output failed Pydantic validation. Error: {e}")
+            raise
         except Exception as e:
-            log.error(f"GeminiParser: Bus {bus_index}: Failed after retries. Error: {e}")
+            log.error(f"GeminiParser: Bus {bus_index}: Failed during LangChain invocation. Error: {e}")
             raise
 
     async def _call_load_trip_details(self, client: httpx.AsyncClient, onclick_attr: str) -> str:
@@ -152,7 +134,7 @@ class GeminiParser:
         
         If 'limit' is provided, it will only process the first 'n' buses.
         """
-        log.info(f"Using GeminiParser to parse bus results (hybrid strategy)...")
+        log.info(f"Using GeminiParser to parse bus results (LangChain strategy)...")
         
         soup = BeautifulSoup(html_content, 'lxml')
         bus_divs = soup.find_all('div', class_ = 'bus-list')
@@ -185,7 +167,7 @@ class GeminiParser:
             detail_table_html = all_details_html[idx]
             
             parsing_tasks.append(
-                self._parse_bus_with_gemini(
+                self._parse_bus_with_langchain(
                     client, 
                     main_list_html, 
                     detail_table_html, 
