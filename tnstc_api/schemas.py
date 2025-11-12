@@ -135,7 +135,7 @@ class SearchRequest(BaseModel):
     from_place_name: str = Field(default=..., description="Starting city name.")
     to_place_name: str = Field(default=..., description="Destination name.")
     onward_date: str = Field(default=..., description="Travel date in DD/MM/YYYY.")
-    return_date: Optional[str] = Field(default="DD/MM/YYYY", description="Optional return date or one-way.")
+    return_date: Optional[str] = Field(default=None, description="Optional return date or one-way.")
 
     # Filter Fields
     min_price_in_rs: Optional[int] = Field(default=100, description="Minimum allowed ticket price in Rupees (default: 100).")
