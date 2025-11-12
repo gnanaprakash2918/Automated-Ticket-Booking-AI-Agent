@@ -59,16 +59,13 @@ async def parse_bus_results(client: httpx.AsyncClient, html_content: str) -> Lis
     This function acts as a simple wrapper around the parser factory.
     All complex logic is now in the `parsers` module.
     """
-    # 1. Get the configured parser (e.g., BeautifulSoupParser or GeminiParser)
     parser: BusParser = get_parser()
     
-    # 2. Call its 'parse' method
     try:
         bus_services = await parser.parse(client, html_content)
         return bus_services
     except Exception as e:
         log.error(f"Unhandled error during parsing strategy '{parser.__class__.__name__}': {e}", exc_info=True)
-        # Return an empty list on critical parser failure
         return []
 
 # Filter Bus Services
