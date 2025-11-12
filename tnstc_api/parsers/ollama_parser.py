@@ -6,7 +6,8 @@ from ..schemas import BusService
 import json
 import asyncio
 import logging
-from ..config import OLLAMA_API_URL, OLLAMA_MODEL, OLLAMA_CONCURRENCY_LIMIT
+import re
+from ..config import OLLAMA_API_URL, OLLAMA_MODEL, OLLAMA_CONCURRENCY_LIMIT, TNSTC_DETAILS_URL
 from tenacity import retry, wait_exponential, stop_after_attempt
 
 log = logging.getLogger(__name__)
@@ -21,8 +22,15 @@ class OllamaParser:
         self.bus_schema = json.dumps(BusService.model_json_schema(), indent=2)
         
         self.system_prompt = f"""
-        You are an expert HTML parsing assistant. Your task is to extract data from a given
-        HTML chunk that represents a *single* bus service.
+        You are an expert HTML parsing assistant. Your task is to extract data from
+        two given HTML chunks that represent a *single* bus service.
+
+        - `MAIN_LIST_HTML`: The summary div from the search results.
+        - `DETAIL_TABLE_HTML`: The more detailed HTML from a sub-request.
+        
+        **Prioritize data from `DETAIL_TABLE_HTML`** as it is more accurate.
+        Use `MAIN_LIST_HTML` as a *fallback* for fields not present in the detail
+        table (like 'bus_type', 'seats_available', 'via_route').
 
         You MUST respond ONLY with a single, valid JSON object that strictly adheres to the
         provided JSON schema. Do not include any other text, explanations, or markdown
@@ -32,10 +40,10 @@ class OllamaParser:
         {self.bus_schema}
         """
 
-    def _build_user_prompt(self, html_chunk: str) -> str:
-        """Builds the final user prompt with the HTML chunk."""
+    def _build_user_prompt(self, main_list_html: str, detail_table_html: str) -> str:
+        """Builds the final user prompt with the two HTML chunks."""
         return f"""
-        Please extract all available data from the HTML chunk below, following the
+        Please extract all available data from the HTML chunks below, following the
         JSON schema provided in the system prompt.
 
         Pay close attention to field types and descriptions:
@@ -47,9 +55,15 @@ class OllamaParser:
         - "seats_available": The *integer* number of seats.
         - "via_route": A list of stop names, or null if not present.
         - If a value is not found, set it to a sensible default (like 0, "N/A", or null).
+        - **REMEMBER**: Prioritize `DETAIL_TABLE_HTML` first.
 
-        HTML CHUNK:
-        {html_chunk}
+        MAIN_LIST_HTML (Fallback):
+        {main_list_html}
+
+        ---
+
+        DETAIL_TABLE_HTML (Primary Source):
+        {detail_table_html}
         """
 
     @retry(
@@ -60,7 +74,8 @@ class OllamaParser:
     async def _parse_chunk_with_ollama(
         self, 
         client: httpx.AsyncClient, 
-        html_chunk: str,
+        main_list_html: str,
+        detail_table_html: str,
         bus_index: int
     ) -> Optional[BusService]:
         """
@@ -68,7 +83,7 @@ class OllamaParser:
         Includes retry logic.
         """
         log.debug(f"OllamaParser: Parsing chunk {bus_index}...")
-        user_prompt = self._build_user_prompt(html_chunk)
+        user_prompt = self._build_user_prompt(main_list_html, detail_table_html)
         
         payload = {
             "model": OLLAMA_MODEL,
@@ -112,7 +127,8 @@ class OllamaParser:
             self, 
             semaphore: asyncio.Semaphore, 
             client: httpx.AsyncClient, 
-            html_chunk: str, 
+            main_list_html: str, 
+            detail_table_html: str,
             idx: int
         ) -> Optional[BusService]:
             """
@@ -122,10 +138,30 @@ class OllamaParser:
             async with semaphore:
                 log.debug(f"OllamaParser: [Semaphore Acquired] Parsing chunk {idx}...")
                 try:
-                    return await self._parse_chunk_with_ollama(client, html_chunk, idx)
+                    return await self._parse_chunk_with_ollama(client, main_list_html, detail_table_html, idx)
                 finally:
                     # The semaphore is automatically released here
                     log.debug(f"OllamaParser: [Semaphore Released] Finished chunk {idx}.")
+
+    async def _call_load_trip_details(self, client: httpx.AsyncClient, onclick_attr: str) -> str:
+        """Extracts arguments and calls the LoadTripDetails endpoint."""
+        args = re.findall(r"'([^']*)'", str(onclick_attr))
+        if len(args) < 6:
+            log.error(f"Failed to parse onclick_attr: {onclick_attr}")
+            return ""
+
+        data = {
+            "ServiceID": args[0], "TripCode": args[1], "StartPlaceID": args[2],
+            "EndPlaceID": args[3], "JourneyDate": args[4], "ClassID": args[5],
+        }
+
+        try:
+            response = await client.post(TNSTC_DETAILS_URL, data=data)
+            response.raise_for_status()
+            return response.text
+        except httpx.RequestError as e:
+            log.error(f"Network error calling loadTripDetails: {e}")
+            return ""
 
     async def parse(
         self, 
@@ -133,8 +169,8 @@ class OllamaParser:
         html_content: str
     ) -> List[BusService]:
         """
-        Parses the main HTML by splitting it into chunks (one per bus)
-        and sending each chunk to the Ollama LLM for parsing in parallel.
+        Parses the main HTML by finding each bus, triggering its detail
+        sub-request, and then parsing each bus individually using Ollama.
         """
         
         log.info(f"Using OllamaParser with model {OLLAMA_MODEL}...")
@@ -148,10 +184,34 @@ class OllamaParser:
             log.warning("OllamaParser: No 'div.bus-list' elements found in HTML.")
             return []
 
+        # 1. Create tasks to fetch detailed HTML for all buses in parallel
+        detail_tasks = []
+        for bus_div in bus_divs:
+            a_tag = bus_div.find("a", attrs={"data-target": "#TripcodePopUp", "onclick": True})
+            onclick_attr = a_tag.get("onclick", "") if a_tag else ""
+
+            if onclick_attr:
+                detail_tasks.append(self._call_load_trip_details(client, str(onclick_attr)))
+            else:
+                detail_tasks.append(asyncio.sleep(0, result="")) # Keep list aligned
+        
+        all_details_html = await asyncio.gather(*detail_tasks)
+
+        # 2. Create tasks to parse each bus using the two HTML sources
         tasks = []
         for idx, bus_div in enumerate(bus_divs):
-            chunk_html = str(bus_div)
-            tasks.append(self._wrapper_parse_chunk(semaphore, client, chunk_html, idx))            
+            main_list_html = str(bus_div)
+            detail_table_html = all_details_html[idx]
+            tasks.append(
+                self._wrapper_parse_chunk(
+                    semaphore, 
+                    client, 
+                    main_list_html, 
+                    detail_table_html, 
+                    idx
+                )
+            )
+        
         results = await asyncio.gather(*tasks)
         
         bus_services: List[BusService] = [service for service in results if service is not None]
