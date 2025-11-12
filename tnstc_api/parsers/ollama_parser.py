@@ -79,7 +79,7 @@ class OllamaParser:
         }
         
         try:
-            response = await client.post(OLLAMA_API_URL, json=payload, timeout=60.0)
+            response = await client.post(OLLAMA_API_URL, json=payload, timeout=130.0)
             response.raise_for_status()
             
             raw_json_string = response.json().get("response")
