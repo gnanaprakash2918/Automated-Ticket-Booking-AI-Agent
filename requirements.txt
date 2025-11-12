@@ -8,3 +8,5 @@ pydantic-settings
 requests
 lxml
 rich
+async-lru
+tenacity
