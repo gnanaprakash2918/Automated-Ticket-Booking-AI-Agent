@@ -115,6 +115,13 @@ class BusService(BaseModel):
             raise ValueError('must be non-negative')
         return v
 
+    @field_validator('child_fare')
+    @classmethod
+    def set_child_fare_na_if_none(cls, v: Optional[str]) -> str:
+        """Converts a null/None child_fare to 'NA'."""
+        if v is None:
+            return "NA"
+        return v
 
 class SearchRequest(BaseModel):
     """Input model defining the required parameters for a bus search, now including optional filters."""
