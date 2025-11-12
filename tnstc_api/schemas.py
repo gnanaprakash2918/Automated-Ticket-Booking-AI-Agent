@@ -144,12 +144,6 @@ class SearchRequest(BaseModel):
         description="List of preferred bus type strings. If None, all types are allowed."
     )
 
-    limit: Optional[int] = Field(
-        default=None, 
-        description="Maximum number of bus services to return. If None, all services are returned."
-    )
-
-
     model_config = {
         "json_schema_extra": {
             "examples": [
@@ -162,8 +156,7 @@ class SearchRequest(BaseModel):
                     "max_price_in_rs": 800,
                     "min_departure_time": "18:00",
                     "max_departure_time": "23:59",
-                    "allowed_bus_types": ["AC SLEEPER", "ULTRA DELUXE"],
-                    "limit": 10
+                    "allowed_bus_types": ["AC SLEEPER", "ULTRA DELUXE"]
                 }
             ]
         }
@@ -195,13 +188,6 @@ class SearchRequest(BaseModel):
     def non_negative_price(cls, v: Optional[int]) -> Optional[int]:
         if v is not None and v < 0:
             raise ValueError('price must be non-negative')
-        return v
-
-    @field_validator('limit')
-    @classmethod
-    def positive_limit(cls, v: Optional[int]) -> Optional[int]:
-        if v is not None and v <= 0:
-            raise ValueError('limit must be a positive number')
         return v
 
 

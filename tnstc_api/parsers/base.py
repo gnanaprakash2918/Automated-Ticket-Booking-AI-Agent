@@ -1,5 +1,5 @@
 import httpx
-from typing import List, Protocol
+from typing import List, Protocol, Optional
 from ..schemas import BusService
 
 class BusParser(Protocol):
@@ -14,7 +14,8 @@ class BusParser(Protocol):
     async def parse(
         self, 
         client: httpx.AsyncClient, 
-        html_content: str
+        html_content: str,
+        limit: Optional[int] = None
     ) -> List[BusService]:
         """
         Parses the raw HTML of the bus search results page.
@@ -23,6 +24,8 @@ class BusParser(Protocol):
             client: An httpx.AsyncClient for making any necessary sub-requests
                     (e.g., to get trip details).
             html_content: The raw HTML string of the main search results page.
+            limit: If provided, stop parsing after this many buses
+                   to prevent excess sub-requests.
 
         Returns:
             A list of BusService objects.

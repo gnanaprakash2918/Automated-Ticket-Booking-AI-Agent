@@ -143,11 +143,14 @@ class GeminiParser:
     async def parse(
         self, 
         client: httpx.AsyncClient, 
-        html_content: str
+        html_content: str,
+        limit: Optional[int] = None
     ) -> List[BusService]:
         """
         Parses the main HTML by finding each bus, triggering its detail
         sub-request, and then parsing each bus individually using Gemini.
+        
+        If 'limit' is provided, it will only process the first 'n' buses.
         """
         log.info(f"Using GeminiParser to parse bus results (hybrid strategy)...")
         
@@ -157,6 +160,10 @@ class GeminiParser:
         if not bus_divs:
             log.warning("GeminiParser: No 'div.bus-list' elements found in HTML.")
             return []
+
+        if limit is not None:
+            log.info(f"GeminiParser: Applying limit of {limit} buses.")
+            bus_divs = bus_divs[:limit]
 
         # 1. Create tasks to fetch detailed HTML for all buses in parallel
         detail_tasks = []

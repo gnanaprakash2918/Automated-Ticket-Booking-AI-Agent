@@ -1,4 +1,4 @@
-from fastapi import FastAPI, status
+from fastapi import FastAPI, status, Query
 from .tnstc_client import get_place_info, parse_bus_results, filter_bus_services
 from fastapi.middleware.cors import CORSMiddleware
 import logging
@@ -10,6 +10,7 @@ import asyncio
 import logging
 from utils.logging_setup import setup_logging
 from .config import TNSTC_BASE_URL
+from typing import Optional
 
 setup_logging()
 log = logging.getLogger(__name__)
@@ -47,7 +48,15 @@ async def check_health():
     }
 
 @app.post("/search_buses", response_model=BusSearchResponse, status_code=status.HTTP_200_OK) 
-async def search_buses(request: SearchRequest):
+async def search_buses(
+    request: SearchRequest,
+    limit: Optional[int] = Query(
+        default=None,
+        gt=0, # Ensures the limit, if provided, is a positive number
+        title="Limit Parsed Results",
+        description="Process and return only the first 'n' bus services found."
+    )
+):
     """
     Performs the full, multi-step bus search against the external TNSTC API, and then filters the results.
     """
@@ -100,7 +109,7 @@ async def search_buses(request: SearchRequest):
             response = await client.post(final_url, data=payload)
             response.raise_for_status()
 
-            bus_list = await parse_bus_results(client, response.text)
+            bus_list = await parse_bus_results(client, response.text, limit)
             
             filtered_bus_list = filter_bus_services(bus_list, request) 
             

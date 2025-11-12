@@ -1,6 +1,6 @@
 import httpx
 from fastapi import HTTPException, status
-from typing import List
+from typing import List, Optional
 from .schemas import PlaceInfo, BusService, SearchRequest 
 import re
 import logging
@@ -52,17 +52,22 @@ async def get_place_info(client: httpx.AsyncClient, place_name: str, is_from_pla
 
 # Parse Bus Results
 
-async def parse_bus_results(client: httpx.AsyncClient, html_content: str) -> List[BusService]:
+async def parse_bus_results(
+    client: httpx.AsyncClient, 
+    html_content: str, 
+    limit: Optional[int] = None
+) -> List[BusService]:
     """
     Parses the raw HTML search results using the configured strategy.
     
-    This function acts as a simple wrapper around the parser factory.
-    All complex logic is now in the `parsers` module.
+    The 'limit' parameter is passed to the parser to stop processing
+    early, preventing unnecessary sub-requests.
     """
     parser: BusParser = get_parser()
     
     try:
-        bus_services = await parser.parse(client, html_content)
+        # Pass the limit down to the parser
+        bus_services = await parser.parse(client, html_content, limit)
         return bus_services
     except Exception as e:
         log.error(f"Unhandled error during parsing strategy '{parser.__class__.__name__}': {e}", exc_info=True)
@@ -109,7 +114,5 @@ def filter_bus_services(
             log.warning(f"Error filtering service {service.trip_code}: {e}")
             continue
 
-    if request.limit is not None:
-        return filtered_services[:request.limit]
-
+    # The limit is NO LONGER applied here. It's applied during parsing.
     return filtered_services

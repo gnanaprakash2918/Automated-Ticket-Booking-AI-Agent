@@ -18,13 +18,16 @@ class BeautifulSoupParser:
     async def parse(
         self, 
         client: httpx.AsyncClient, 
-        html_content: str
+        html_content: str,
+        limit: Optional[int] = None
     ) -> List[BusService]:
         """
         Parses the raw HTML search results into a structured list of BusService models.
 
         It first tries to get detailed data by calling 'loadTripDetails' for each bus
         concurrently.
+        
+        If 'limit' is provided, it will only process the first 'n' buses.
         """
         soup = BeautifulSoup(html_content, 'lxml')
         bus_services: List[BusService] = []
@@ -32,6 +35,10 @@ class BeautifulSoupParser:
         detail_tasks = []
         temp_data_list = []
         bus_divs = soup.find_all('div', class_ = 'bus-list')
+
+        if limit is not None:
+            log.info(f"BeautifulSoupParser: Applying limit of {limit} buses.")
+            bus_divs = bus_divs[:limit]
 
         # Scrape main list and create detail-call tasks
         for idx, bus_div in enumerate(bus_divs):
@@ -302,5 +309,3 @@ class BeautifulSoupParser:
             if len(arr_cells) >= 4: data['arrival_time'] = arr_cells[3].text.strip()
         except IndexError:
             log.warning("IndexError while parsing stops table rows.")
-
-# assert issubclass(BeautifulSoupParser, BusParser)
