@@ -198,13 +198,13 @@ class OllamaParser:
                 log.warning(f"OllamaParser Bus {idx}: No 'onclick' attribute found. Cannot fetch details.")
         
         log.info(f"OllamaParser: Awaiting concurrent detail fetch for {len(detail_tasks)} buses...")
-        all_details_html = await asyncio.gather(*detail_tasks)
+        all_details_html = await asyncio.gather(*detail_tasks, return_exceptions=True)
 
         # 2. Create tasks to parse each bus using the two HTML sources
         tasks = []
         for idx, bus_div in enumerate(bus_divs):
             main_list_html = str(bus_div)
-            detail_table_html = all_details_html[idx]
+            detail_table_html = str(all_details_html[idx])
             tasks.append(
                 self._wrapper_parse_chunk(
                     semaphore, 
