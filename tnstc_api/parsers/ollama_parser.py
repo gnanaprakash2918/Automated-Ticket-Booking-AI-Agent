@@ -2,6 +2,7 @@ import httpx
 from typing import List, Optional
 from bs4 import BeautifulSoup
 from pydantic import ValidationError
+
 from ..schemas import BusService
 import asyncio
 import logging
@@ -11,6 +12,8 @@ from tenacity import wait_exponential, stop_after_attempt, Retrying
 
 from langchain_ollama import ChatOllama
 from langchain_core.messages import HumanMessage, SystemMessage
+
+from utils.clean_html import minify_html
 
 log = logging.getLogger(__name__)
 
@@ -198,8 +201,8 @@ class OllamaParser:
         # 2. Create tasks to parse each bus using the two HTML sources
         tasks = []
         for idx, bus_div in enumerate(bus_divs):
-            main_list_html = str(bus_div)
-            detail_table_html = all_details_html[idx]
+            main_list_html = minify_html(str(bus_div))
+            detail_table_html = minify_html(str(all_details_html[idx]))
             tasks.append(
                 self._wrapper_parse_chunk(
                     semaphore, 
