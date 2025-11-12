@@ -1,7 +1,7 @@
 import httpx
 from typing import List, Optional
 import logging
-from tenacity import retry, wait_exponential, stop_after_attempt
+from tenacity import wait_exponential, stop_after_attempt, Retrying
 import asyncio
 import re
 from bs4 import BeautifulSoup
@@ -51,24 +51,16 @@ class GeminiParser:
           table (like 'bus_type', 'seats_available', 'via_route').
         """
             
-    @retry(
-        wait=wait_exponential(multiplier=1, min=2, max=60),
-        stop=stop_after_attempt(5),
-        reraise=True
-    )
     async def _parse_bus_with_langchain(
         self,
-        client: httpx.AsyncClient,
         main_list_html: str,
         detail_table_html: str,
         bus_index: int
     ) -> Optional[BusService]:
         """
         Parses a single bus by sending its two HTML sources to Gemini
-        using LangChain's structured output. This method is retryable.
+        using LangChain's structured output. This method is retryable via tenacity.
         """
-        log.debug(f"GeminiParser: Parsing bus {bus_index} with LangChain...")
-
         user_prompt = f"""
         Please extract all bus service details from the following HTML snippets.
         Prioritize `DETAIL_TABLE_HTML` and use `MAIN_LIST_HTML` as a fallback.
@@ -81,29 +73,41 @@ class GeminiParser:
         DETAIL_TABLE_HTML (Primary Source):
         {detail_table_html}
         """
-
+        
         messages = [
             SystemMessage(content=self.system_prompt),
             HumanMessage(content=user_prompt)
         ]
         
-        try:
-            service = await self.structured_llm.ainvoke(messages)
+        retry_config = Retrying(
+            wait=wait_exponential(multiplier=1, min=2, max=60),
+            stop=stop_after_attempt(5),
+            reraise=True
+        )
 
-            if isinstance(service, BusService):
-                return service
-            else:
-                log.error(f"GeminiParser: Bus {bus_index}: LangChain returned unexpected type: {type(service)}")
-                return None
-        
-        except ValidationError as e:
-            log.error(f"GeminiParser: Bus {bus_index}: LLM output failed Pydantic validation. Error: {e}")
-            raise
-        except Exception as e:
-            log.error(f"GeminiParser: Bus {bus_index}: Failed during LangChain invocation: {e}")
-            raise
+        for attempt in retry_config:
+            with attempt:
+                log.info(f"LLM_Parser Bus {bus_index} (Attempt {attempt.retry_state.attempt_number}): Sending HTML (Main: {len(main_list_html)} chars, Detail: {len(detail_table_html)} chars) to LLM for structured extraction.") 
+                
+                try:
+                    service = await self.structured_llm.ainvoke(messages)
 
-    async def _call_load_trip_details(self, client: httpx.AsyncClient, onclick_attr: str) -> str:
+                    if isinstance(service, BusService):
+                        log.info(f"LLM_Parser Bus {bus_index} SUCCESS: Extracted details for '{service.operator}' (Price: {service.price_in_rs}, Trip: {service.trip_code}).") 
+                        return service
+                    else:
+                        log.error(f"GeminiParser: Bus {bus_index}: LangChain returned unexpected type: {type(service)}")
+                        raise TypeError("LLM returned wrong type")
+                
+                except ValidationError as e:
+                    log.error(f"LLM_Parser Bus {bus_index}: Pydantic validation failed. Input: '{user_prompt[:50]}...'. Error: {e}", exc_info=True) 
+                    raise
+                except Exception as e:
+                    log.error(f"GeminiParser: Bus {bus_index}: Failed during LangChain invocation: {e}")
+                    raise
+
+
+    async def _call_load_trip_details(self, client: httpx.AsyncClient, onclick_attr: str, bus_index: int) -> str:
         """Extracts arguments and calls the LoadTripDetails endpoint."""
         args = re.findall(r"'([^']*)'", str(onclick_attr))
         if len(args) < 6:
@@ -120,7 +124,7 @@ class GeminiParser:
             response.raise_for_status()
             return response.text
         except httpx.RequestError as e:
-            log.error(f"Network error calling loadTripDetails: {e}")
+            log.error(f"Network error calling loadTripDetails for bus {bus_index}: {e}")
             return ""
 
     async def parse(
@@ -150,15 +154,19 @@ class GeminiParser:
 
         # 1. Create tasks to fetch detailed HTML for all buses in parallel
         detail_tasks = []
-        for bus_div in bus_divs:
+        for idx, bus_div in enumerate(bus_divs):
             a_tag = bus_div.find("a", attrs={"data-target": "#TripcodePopUp", "onclick": True})
             onclick_attr = a_tag.get("onclick", "") if a_tag else ""
 
             if onclick_attr:
-                detail_tasks.append(self._call_load_trip_details(client, str(onclick_attr)))
+                detail_tasks.append(self._call_load_trip_details(client, str(onclick_attr), idx)) # ADDED IDX
             else:
-                detail_tasks.append(asyncio.sleep(0, result="")) # Keep list aligned
+                future = asyncio.Future()
+                future.set_result("")
+                detail_tasks.append(future)
+                log.warning(f"GeminiParser Bus {idx}: No 'onclick' attribute found. Cannot fetch details.")
 
+        log.info(f"GeminiParser: Awaiting concurrent detail fetch for {len(detail_tasks)} buses...") 
         all_details_html = await asyncio.gather(*detail_tasks)
 
         # 2. Create tasks to parse each bus using the two HTML sources
@@ -169,7 +177,6 @@ class GeminiParser:
             
             parsing_tasks.append(
                 self._parse_bus_with_langchain(
-                    client, 
                     main_list_html, 
                     detail_table_html, 
                     idx
@@ -177,6 +184,7 @@ class GeminiParser:
             )
         
         # 3. Gather all parsing results
+        log.info(f"GeminiParser: Awaiting concurrent LLM parsing for {len(parsing_tasks)} buses...") 
         results = await asyncio.gather(*parsing_tasks, return_exceptions=True)
         
         bus_services: List[BusService] = []
@@ -184,7 +192,7 @@ class GeminiParser:
             if isinstance(res, BusService):
                 bus_services.append(res)
             elif isinstance(res, Exception):
-                log.error(f"GeminiParser: Bus {idx}: Failed final parsing attempt. Error: {res}")
+                log.error(f"GeminiParser: Bus {idx}: Failed final parsing attempt after retries. Error: {res}")
 
         log.info(f"GeminiParser: Successfully parsed {len(bus_services)} / {len(bus_divs)} bus services.")
         return bus_services

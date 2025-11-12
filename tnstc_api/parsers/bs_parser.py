@@ -57,7 +57,7 @@ class BeautifulSoupParser:
                 # 2. Add task to get detailed HTML
                 if onclick_attr:
                     detail_tasks.append(self._call_load_trip_details(client, str(onclick_attr), idx))
-                    log.debug(f"BS_Parser Bus {idx}: Extracted {len(re.findall(r"'([^']*)'", str(onclick_attr)))} trip detail call arguments from onclick: {onclick_attr[:50]}...") # VERBOSE LOGGING
+                    log.debug(f"BS_Parser Bus {idx}: Extracted {len(re.findall(r"'([^']*)'", str(onclick_attr)))} trip detail call arguments from onclick: {onclick_attr[:50]}...")
                 else:
                     future = asyncio.Future()
                     future.set_result("")
