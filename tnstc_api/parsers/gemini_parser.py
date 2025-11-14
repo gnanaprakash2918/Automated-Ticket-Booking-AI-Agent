@@ -67,7 +67,10 @@ class GeminiParser:
         ---
 
         DETAIL_TABLE_HTML (Primary Source):
-        {detail_table_html}
+        {detail_table_html}\n
+
+        Remember trip_code and Service code are the same thing\n
+        route_code and Route no are the same thing too\n
         """
         
         messages = [

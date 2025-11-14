@@ -67,6 +67,8 @@ class OllamaParser:
         TASK:
         Extract every available field defined in the JSON_SCHEMA from these HTML fragments.
         Prioritize DETAIL_TABLE_HTML for accuracy and use MAIN_LIST_HTML only if a field is missing.
+        Remember trip_code and Service code are the same thing\n
+        route_code and Route no are the same thing too\n
 
         Return:
         → A single JSON object that conforms exactly to the JSON_SCHEMA provided in the system prompt.
