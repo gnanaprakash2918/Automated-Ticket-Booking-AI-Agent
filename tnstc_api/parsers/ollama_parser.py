@@ -32,7 +32,7 @@ class OllamaParser:
                 base_url=OLLAMA_BASE_URL
             )
 
-            prompt_gen = PromptGenerator()
+            self.prompt_gen = PromptGenerator()
 
             self.structured_llm = self.llm.with_structured_output(BusService, method="json_mode")
             log.info(f"OllamaParser initialized. Timeout set to {OLLAMA_LOAD_TIMEOUT}s (from env).")
@@ -44,7 +44,7 @@ class OllamaParser:
             log.error(f"Failed to initialize Ollama LLM: {e}")
             raise
         
-        self.system_prompt = prompt_gen.build_system_prompt(BusService)
+        self.system_prompt = self.prompt_gen.build_system_prompt(BusService)
 
     async def _parse_chunk_with_langchain(
         self,

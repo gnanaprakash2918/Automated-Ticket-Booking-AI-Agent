@@ -10,6 +10,8 @@ from pydantic import ValidationError
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from .prompt_builder import PromptGenerator
+
 from ..schemas import BusService
 from ..config import GEMINI_API_KEY, GEMINI_MODEL, TNSTC_DETAILS_URL, GEMINI_LOAD_TIMEOUT
 
@@ -31,6 +33,9 @@ class GeminiParser:
                 api_key=GEMINI_API_KEY,
                 request_timeout=GEMINI_LOAD_TIMEOUT
             )
+
+            self.prompt_gen = PromptGenerator()
+
             self.structured_llm = self.llm.with_structured_output(BusService)
         except ImportError:
             log.error("LangChain Google GENAI library not found. Please install 'langchain-google-genai'")
@@ -39,17 +44,7 @@ class GeminiParser:
             log.error(f"Failed to initialize Gemini LLM: {e}")
             raise
         
-        self.system_prompt = f"""
-        You are an expert, automated HTML parsing engine. Your sole task is to extract
-        bus service details from the provided HTML content.
-
-        - You will be given two HTML snippets:
-          1. `MAIN_LIST_HTML`: The summary div from the search results.
-          2. `DETAIL_TABLE_HTML`: The more detailed HTML from a sub-request.
-        - **Prioritize data from `DETAIL_TABLE_HTML`** as it is more accurate.
-        - Use `MAIN_LIST_HTML` as a *fallback* for fields not present in the detail
-          table (like 'bus_type', 'seats_available', 'via_route').
-        """
+        self.system_prompt = self.prompt_gen.build_system_prompt(BusService)
             
     async def _parse_bus_with_langchain(
         self,

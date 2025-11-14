@@ -1,6 +1,45 @@
 import json
 from pydantic import BaseModel
-from typing import Type, List, Dict, Any
+from typing import Type, Any
+from ..schemas import *
+from pydantic import BaseModel
+from typing import Type, Any, get_args
+import json
+import json
+import inspect
+
+def _get_base_type(type_hint: Any) -> Any:
+    """Recursively resolves the inner type from complex type hints (e.g., Optional, List)."""
+    args = get_args(type_hint)
+    if args:
+        return _get_base_type(args[0])
+    return type_hint
+
+def extract_examples(model: Type[BaseModel]) -> str:
+    """
+    Recursively extracts and formats ALL JSON examples from a Pydantic model 
+    and its nested models.
+    """
+    example_str = "## Reference Examples for Data Formatting\n"
+    
+    if 'json_schema_extra' in model.model_config and isinstance(model.model_config['json_schema_extra'], dict) and 'examples' in model.model_config['json_schema_extra']:
+        examples = model.model_config['json_schema_extra']['examples']
+        
+        if examples:
+            example_str += f"- **{model.__name__} Examples:**\n"
+            
+            for i, example in enumerate(examples): # type: ignore
+                example_str += f"  - **Example {i + 1}:**\n"
+                example_str += "```json\n" + json.dumps(example, indent=2) + "\n```\n"
+
+    for name, field in model.model_fields.items():
+        field_type = _get_base_type(field.annotation)
+        
+        if inspect.isclass(field_type) and issubclass(field_type, BaseModel) and field_type != model:
+            nested_examples = extract_examples(field_type)
+            example_str += nested_examples.replace("## Reference Examples for Data Formatting", "").strip()
+
+    return example_str.strip()
 
 class PromptGenerator:
     """
@@ -15,110 +54,18 @@ class PromptGenerator:
         """
         Builds the main system prompt for the given Pydantic model.
         """
-        try:
-            # Get the schema from the model
-            schema = pydantic_model.model_json_schema()
-        except Exception as e:
-            print(f"Error generating schema: {e}")
-            return "Error: Could not generate model schema."
-            
-        model_name = schema.get('title', pydantic_model.__name__)
-        model_desc = schema.get('description', 'No model description provided.')
+        json_schema = BusSearchResponse.model_json_schema()    
+        examples_hint = extract_examples(BusSearchResponse)
         
-        # Build the different parts of the prompt
-        field_rules = self._build_field_rules(schema)
-        examples = self._build_examples(schema)
-        
-        # Assemble the final prompt
-        prompt = f"""
-You are a high-precision JSON extraction assistant. Your task is to analyze the
-provided HTML context and extract data to populate a *single*, valid JSON object.
+        system_content = f"""
+        You are a reliable JSON generation engine and an expert automated HTML parsing engine.\n
+        Your entire output MUST be a single, valid JSON object that strictly conforms to the provided JSON Schema.\n
+        DO NOT include any conversational text or markdown outside of the final JSON block.\n
 
-You MUST adhere to the following strict rules:
-1.  **JSON ONLY**: Your entire response MUST be a single, raw JSON object. Do not
-    include any text, explanations, comments, or markdown formatting (like ```json).
-2.  **STRICT SCHEMA**: The JSON object MUST conform *exactly* to the target
-    model: **{model_name}**.
-3.  **NULL FOR MISSING**: If a field's value cannot be found in the text, you
-    MUST use `null` (unless it's a list, then use `[]`).
-4.  **NO HALLUCINATIONS**: Do not invent data. Only extract data present in the
-    provided HTML.
-5.  **FOLLOW ALL RULES**: Pay close attention to the specific data types,
-    formats, and validation rules listed for each field below.
+        {examples_hint}
 
----
-### Target Model: {model_name}
-{model_desc}
+        ## JSON Output Schema (Strict Constraint)
+        {json.dumps(json_schema, indent=2)}
+        """
 
----
-### Field-by-Field Rules & Validation
-You must follow these rules for each field:
-
-{field_rules}
-
----
-### Output Examples
-Here are one or more examples of the *exact* JSON output format you must produce.
-
-{examples}
-
----
-### FINAL TASK
-Analyze the user's HTML snippets. Extract all available data according to the
-field rules. Return *ONLY* the single, raw, valid JSON object.
-"""
-        return prompt
-
-    def _build_field_rules(self, schema: Dict[str, Any]) -> str:
-        """Helper to build the human-readable list of field rules."""
-        rules: List[str] = []
-        properties = schema.get('properties', {})
-        required_fields = set(schema.get('required', []))
-
-        for field_name, details in properties.items():
-            # 1. Get Type
-            field_type = details.get('type', 'any')
-            if field_type == 'array':
-                item_type = details.get('items', {}).get('type', 'any')
-                field_type = f"List[ {item_type} ]"
-            
-            # 2. Get Requirement
-            req_status = "REQUIRED" if field_name in required_fields else "OPTIONAL"
-            
-            # 3. Get Description (This is the most important part)
-            desc = details.get('description', 'No description.')
-            
-            # 4. Get Default
-            default_val = details.get('default')
-            default_str = f" (Default: {json.dumps(default_val)})" if default_val is not None else ""
-
-            # 5. Assemble
-            rules.append(
-                f"- **{field_name}** (`{field_type}` | *{req_status}*): {desc}{default_str}"
-            )
-        
-        if not rules:
-            return "No fields defined in schema."
-            
-        return "\n".join(rules)
-
-    def _build_examples(self, schema: Dict[str, Any]) -> str:
-        """Helper to extract and format examples from the schema."""
-        
-        # Pydantic v2 stores examples in 'json_schema_extra'
-        examples = schema.get('json_schema_extra', {}).get('examples', [])
-        
-        # Fallback for older Pydantic or direct 'examples' key
-        if not examples and 'examples' in schema:
-            examples = schema['examples']
-            
-        if not examples:
-            return "No examples provided in the schema."
-
-        example_strs: List[str] = []
-        for i, ex in enumerate(examples):
-            example_strs.append(
-                f"**Example {i + 1}**:\n```json\n{json.dumps(ex, indent=2)}\n```"
-            )
-            
-        return "\n\n".join(example_strs)
+        return system_content
