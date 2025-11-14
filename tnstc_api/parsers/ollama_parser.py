@@ -2,84 +2,81 @@ import httpx
 from typing import List, Optional
 from bs4 import BeautifulSoup
 from pydantic import ValidationError
-from ..schemas import BusService, BusServiceWithReasoning
+
+from ..schemas import BusService
 import asyncio
 import logging
 import re
-from ..config import OLLAMA_MODEL, OLLAMA_CONCURRENCY_LIMIT, TNSTC_DETAILS_URL, OLLAMA_BASE_URL, OLLAMA_LOAD_TIMEOUT
+from ..config import OLLAMA_MODEL, OLLAMA_CONCURRENCY_LIMIT, TNSTC_DETAILS_URL, OLLAMA_BASE_URL
 from tenacity import wait_exponential, stop_after_attempt, Retrying
 
-from langchain_ollama import ChatOllama
-from langchain_core.messages import HumanMessage, SystemMessage
+import ollama
+import json
+
+from utils.clean_html import minify_html
+from .prompt_builder import PromptGenerator
 
 log = logging.getLogger(__name__)
 
 class OllamaParser:
     """
-    Implements the BusParser interface using a local LLM (via LangChain's ChatOllama)
-    to parse HTML content chunk by chunk.
+    Implements the BusParser interface using a local LLM (via the native 'ollama' client)
+    to parse HTML content chunk by chunk using JSON mode.
     """
 
     def __init__(self):
         
         try:
-            self.llm = ChatOllama(
-                model=OLLAMA_MODEL, 
-                base_url=OLLAMA_BASE_URL
-            )
-            self.structured_llm = self.llm.with_structured_output(BusServiceWithReasoning, method="json_mode")
-            log.info(f"OllamaParser initialized. Timeout set to {OLLAMA_LOAD_TIMEOUT}s (from env).")
+            self.client = ollama.AsyncClient(host=OLLAMA_BASE_URL)
+            self.model = OLLAMA_MODEL
+            self.prompt_gen = PromptGenerator()
+            
+            self.json_schema = BusService.model_json_schema()
+
+            self.system_prompt = self.prompt_gen.build_system_prompt(BusService)
+
+            log.info(f"OllamaParser initialized with native client. Model: {self.model}. Base URL: {OLLAMA_BASE_URL}")
             
         except ImportError:
-            log.error("LangChain Ollama library not found. Please install 'langchain-ollama'")
+            log.error("Ollama library not found. Please install 'ollama'")
             raise
         except Exception as e:
-            log.error(f"Failed to initialize Ollama LLM: {e}")
+            log.error(f"Failed to initialize Ollama client: {e}")
             raise
-        
-        self.system_prompt = f"""
-        You are an expert, automated HTML parsing engine. Your sole task is to extract
-        bus service details from the provided HTML content and return a JSON object.
 
-        - You will be given two HTML snippets:
-          1. `MAIN_LIST_HTML`: The summary div from the search results.
-          2. `DETAIL_TABLE_HTML`: The more detailed HTML from a sub-request.
-        - **Prioritize data from `DETAIL_TABLE_HTML`** as it is more accurate.
-        - Use `MAIN_LIST_HTML` as a *fallback* for fields not present in the detail
-          table (like 'bus_type', 'seats_available', 'via_route').
-
-        - **PRIORITY RULE:** Prioritize data from `DETAIL_TABLE_HTML`. Use `MAIN_LIST_HTML` only as a fallback.
-        - **REASONING RULE:** You MUST populate the `llm_reasoning` field with a concise, step-by-step summary of where you found the Price, Duration, Bus Type, and Seats Available.
-        """
-
-    async def _parse_chunk_with_langchain(
+    async def _parse_chunk_with_ollama(
         self,
         main_list_html: str,
         detail_table_html: str,
         bus_index: int
     ) -> Optional[BusService]:
         """
-        Sends a single HTML chunk to the Ollama API for parsing and validation.
-        Returns the clean BusService object (without reasoning field).
+        Sends a single HTML chunk to the Ollama API for parsing and validation
+        using the native 'ollama' client's JSON mode. This method is retryable via tenacity.
         """
         
         user_prompt = f"""
-        Please extract all bus service details from the following HTML snippets.
-        Prioritize `DETAIL_TABLE_HTML` and use `MAIN_LIST_HTML` as a fallback.
-
-        
-        MAIN_LIST_HTML (Fallback):
+        MAIN_LIST_HTML (Fallback Source):
         {main_list_html}
         
         ---
 
         DETAIL_TABLE_HTML (Primary Source):
         {detail_table_html}
+
+        TASK:
+        Extract every available field defined in the JSON_SCHEMA from these HTML fragments.
+        Prioritize DETAIL_TABLE_HTML for accuracy and use MAIN_LIST_HTML only if a field is missing.
+
+        Return:
+        → A single JSON object that conforms exactly to the JSON_SCHEMA provided in the system prompt.
+        → Do not include any extra text, comments, or markdown.
+        → Output strictly raw JSON.
         """
         
         messages = [
-            SystemMessage(content=self.system_prompt),
-            HumanMessage(content=user_prompt)
+            {'role': 'system', 'content': self.system_prompt},
+            {'role': 'user', 'content': user_prompt}
         ]
         
         retry_config = Retrying(
@@ -88,29 +85,37 @@ class OllamaParser:
             reraise=True
         )
 
+        json_content = "" 
         for attempt in retry_config:
             with attempt:
-                log.info(f"LLM_Parser Bus {bus_index} (Attempt {attempt.retry_state.attempt_number}): Sending HTML (Main: {len(main_list_html)} chars, Detail: {len(detail_table_html)} chars) to LLM for structured extraction.")
+                log.info(f"LLM_Parser Bus {bus_index} (Attempt {attempt.retry_state.attempt_number}): Sending HTML (Main: {len(main_list_html)} chars, Detail: {len(detail_table_html)} chars) to Ollama for JSON extraction.") 
 
                 try:
-                    service_with_reasoning = await self.structured_llm.ainvoke(messages)
-
-                    if isinstance(service_with_reasoning, BusServiceWithReasoning):
+                    response = await self.client.chat(
+                        model=self.model,
+                        messages=messages,
                         
-                        log.info(f"LLM_Parser Bus {bus_index} SUCCESS: Extracted details for '{service_with_reasoning.operator}' (Price: {service_with_reasoning.price_in_rs}, Trip: {service_with_reasoning.trip_code}).") 
-                        if service_with_reasoning.llm_reasoning:
-                            log.info(f"LLM Reasoning for Bus {bus_index}: {service_with_reasoning.llm_reasoning}")
-                        
-                        return BusService.model_validate(service_with_reasoning.model_dump())
-                    else:
-                        log.error(f"OllamaParser: Bus {bus_index}: LangChain returned unexpected type: {type(service_with_reasoning)}")
-                        raise TypeError("LLM returned wrong type")
+                        format=self.json_schema,
+                        options={
+                            'temperature': 0.0
+                        }
+                    )
 
+                    json_content = response['message']['content']
+                    
+                    service = BusService.model_validate_json(json_content)
+
+                    log.info(f"LLM_Parser Bus {bus_index} SUCCESS: Extracted details for '{service.operator}' (Price: {service.price_in_rs}, Trip: {service.trip_code}).") 
+                    return service
+                
+                except json.JSONDecodeError as e:
+                    log.error(f"LLM_Parser Bus {bus_index}: Failed to decode JSON from LLM. Content: '{json_content[:150]}...'. Error: {e}", exc_info=True)
+                    raise
                 except ValidationError as e:
-                    log.error(f"LLM_Parser Bus {bus_index}: Pydantic validation failed. Input: '{user_prompt[:50]}...'. Error: {e}", exc_info=True)
+                    log.error(f"LLM_Parser Bus {bus_index}: Pydantic validation failed. Input: '{json_content[:150]}...'. Error: {e}", exc_info=True) 
                     raise
                 except Exception as e:
-                    log.error(f"OLLAMA_LOAD_TIMEOUT may be too low. Error during LangChain invocation: {e}")
+                    log.error(f"OLLAMA_LOAD_TIMEOUT may be too low. Error during Ollama chat invocation: {e}", exc_info=True)
                     raise
 
 
@@ -129,7 +134,7 @@ class OllamaParser:
             async with semaphore:
                 log.info(f"OllamaParser: [SEMAPHORE ACQUIRED] Bus {idx}. Remaining slots: {semaphore._value}")
                 try:
-                    return await self._parse_chunk_with_langchain(
+                    return await self._parse_chunk_with_ollama(
                         main_list_html, 
                         detail_table_html, 
                         idx
@@ -168,7 +173,7 @@ class OllamaParser:
         sub-request, and then parsing each bus individually using Ollama.
         """
         
-        log.info(f"Using OllamaParser with model {OLLAMA_MODEL} (LangChain strategy)...")
+        log.info(f"Using OllamaParser with model {OLLAMA_MODEL} (Native client strategy)...")
         semaphore = asyncio.Semaphore(OLLAMA_CONCURRENCY_LIMIT)
         log.info(f"Ollama concurrency limited to {OLLAMA_CONCURRENCY_LIMIT} simultaneous requests.")
 
@@ -203,8 +208,11 @@ class OllamaParser:
         # 2. Create tasks to parse each bus using the two HTML sources
         tasks = []
         for idx, bus_div in enumerate(bus_divs):
-            main_list_html = str(bus_div)
-            detail_table_html = str(all_details_html[idx])
+            main_list_html = re.sub(r"[\r\n]+", "", str(bus_div))
+            detail_table_html = re.sub(r"[\r\n]+", "", str(all_details_html[idx]))
+
+            main_list_html = minify_html(main_list_html)
+            detail_table_html = minify_html(detail_table_html)
             tasks.append(
                 self._wrapper_parse_chunk(
                     semaphore, 
