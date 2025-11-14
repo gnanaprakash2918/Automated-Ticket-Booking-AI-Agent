@@ -45,22 +45,20 @@ class PromptGenerator:
     """
     Generates a high-quality, human-readable system prompt for an LLM
     based on a Pydantic model's schema.
-    
-    This prompt is designed for structured JSON extraction and is far
-    more effective than simply dumping the raw JSON schema.
     """
 
     def build_system_prompt(self, pydantic_model: Type[BaseModel]) -> str:
         """
         Builds the main system prompt for the given Pydantic model.
         """
-        json_schema = BusSearchResponse.model_json_schema()    
-        examples_hint = extract_examples(BusSearchResponse)
+        
+        json_schema = pydantic_model.model_json_schema() 
+        examples_hint = extract_examples(pydantic_model)
         
         system_content = f"""
-        You are a reliable JSON generation engine and an expert automated HTML parsing engine.\n
-        Your entire output MUST be a single, valid JSON object that strictly conforms to the provided JSON Schema.\n
-        DO NOT include any conversational text or markdown outside of the final JSON block.\n
+        You are a reliable JSON generation engine and an expert automated HTML parsing engine.
+        Your entire output MUST be a single, valid JSON object that strictly conforms to the provided JSON Schema.
+        DO NOT include any conversational text or markdown outside of the final JSON block.
 
         {examples_hint}
 

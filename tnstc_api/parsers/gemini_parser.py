@@ -56,23 +56,46 @@ class GeminiParser:
         Parses a single bus by sending its two HTML sources to Gemini.
         Returns the clean BusService object (without reasoning field).
         """
-        user_prompt = f"""
-        Please extract all bus service details from the following HTML snippets.
-        Prioritize `DETAIL_TABLE_HTML` and use `MAIN_LIST_HTML` as a fallback.
 
-        
-        MAIN_LIST_HTML (Fallback):
+        user_prompt = f"""
+        MAIN_LIST_HTML
         {main_list_html}
         
         ---
 
-        DETAIL_TABLE_HTML (Primary Source):
-        {detail_table_html}\n
+        DETAIL_TABLE_HTML
+        {detail_table_html}
 
-        Remember trip_code and Service code are the same thing\n
-        route_code and Route no are the same thing too\n
+        TASK:
+        Extract every available field defined in the JSON_SCHEMA from these HTML fragments.
+
+        ---
+        Extraction Hints (Follow these carefully):
+        1.  trip_code: Find the <a> tag. The trip_code is the text inside it. extract the text inside MAIN_LIST_HTML <b><a>...</a></b> (trim whitespace). If not found there, check DETAIL_TABLE_HTML.
+            (e.g., from `<a> 0005SALMADMM01L</a>`, the trip_code is "0005SALMADMM01L").
+        2.  route_code: This is the value usually (not everytime though) immediately after the " / " separator. often follows the trip code or appears near it; check MAIN_LIST_HTML first.
+            (e.g., from `...</a></b> / 104N1`, the route_code is "104N1").
+        3.  via_route: Find the text "Via-". The value is a list of the places that follow. 
+            (e.g., from `Via-KARUR , DINDIGUL`, the via_route is ["KARUR", "DINDIGUL"]).
+        4.  trip_code vs route_code: They are different fields. Do not confuse them. 
+            trip_code is the long one (0005SALMADMM01L), route_code is the short one (104N1).
+        5.  duration: Use the value ending in "Hrs" (e.g., "6.10Hrs" becomes "6.10"). return a normalized float-string in hours with 2 decimals. (6h10m -> "6.17")
+        6. price and seats: prefer MAIN_LIST_HTML, use details list as fallback if not found.
+        7. total_kms: Look in the `DETAIL_TABLE_HTML` for a label like "Approx. Kms" or "Total Kms" or something similar and extract the numeric value next to it (e.g., "253.00").
+        8. If a value is not found, return "NA".
+        9. Return only the JSON object, nothing else.
+
+        Trip code pattern hint: look for the longest contiguous alphanumeric uppercase token of length >=8 (e.g., 0005SALMADMM01L).
+
+        ---
+
+        Return:
+        → A single JSON object that conforms exactly to the JSON_SCHEMA provided in the system prompt.
+        → Do not include any extra text, comments, or markdown.
+        → If a value is not found, return "NA" for that field (or `null` for `via_route`).
+        → Output strictly raw JSON.
         """
-        
+
         messages = [
             SystemMessage(content=self.system_prompt),
             HumanMessage(content=user_prompt)
