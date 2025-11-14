@@ -12,7 +12,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from .prompt_builder import PromptGenerator
 
-from ..schemas import BusService
+from ..schemas import BusService, BusServiceWithReasoning
 from ..config import GEMINI_API_KEY, GEMINI_MODEL, TNSTC_DETAILS_URL, GEMINI_LOAD_TIMEOUT
 
 log = logging.getLogger(__name__)

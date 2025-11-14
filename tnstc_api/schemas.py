@@ -6,9 +6,18 @@ import re
 class PlaceInfo(BaseModel):
     """Internal model used to store the parsed ID, Code, and Name for a location."""
 
-    id: str = Field(default=..., description="The internal TNSTC ID for the place (digits only).")
-    code: str = Field(default=..., description="Three-letter uppercase TNSTC code.")
-    name: str = Field(default=..., description="Full normalized name of the place.")
+    id: str = Field(
+        default=..., 
+        description="The internal TNSTC ID for the place. Must be digits only. (e.g., \"488\")"
+    )
+    code: str = Field(
+        default=..., 
+        description="Three-letter uppercase TNSTC code. Must be 3 uppercase letters. (e.g., \"DHA\")"
+    )
+    name: str = Field(
+        default=..., 
+        description="Full normalized name of the place. (e.g., \"DHARMAPURI\")"
+    )
 
     model_config = {
         "json_schema_extra": {
@@ -36,21 +45,57 @@ class PlaceInfo(BaseModel):
 class BusService(BaseModel):
     """Output model representing a single available bus service and its details."""
 
-    operator: str = Field(default=..., description="Name of the operating corporation.")
-    bus_type: str = Field(default=..., description="Type or class of the bus.")
+    operator: str = Field(
+        default=..., 
+        description="Name of the operating corporation. (e.g., \"SALEM\", \"TNSTC-VILLUPURAM\")"
+    )
+    bus_type: str = Field(
+        default=..., 
+        description="Type or class of the bus. (e.g., \"AC 3X2\", \"ULTRA DELUXE\", \"AC SLEEPER\")"
+    )
     
-    trip_code: str = Field(default="N/A", description="Unique service code.")
-    route_code: str = Field(default="N/A", description="TNSTC internal route identifier.")
+    trip_code: str = Field(
+        default="N/A", 
+        description="Unique service code. (e.g., \"2215DHACHEDD02A\")"
+    )
+    route_code: str = Field(
+        default="N/A", 
+        description="TNSTC internal route identifier. (e.g., \"275H\")"
+    )
     
-    departure_time: str = Field(default=..., description="Scheduled departure time in 24-hour format.")
-    arrival_time: str = Field(default=..., description="Scheduled arrival time in 24-hour format.")
-    duration: str = Field(default=..., description="Total journey duration in hours, decimal allowed.")
-    price_in_rs: int = Field(default=..., description="Base ticket price in Rupees.")
-    seats_available: int = Field(default=..., description="Number of available seats.")
-    via_route: Optional[List[str]] = Field(default=None, description="List of key intermediate stops on the route.")
+    departure_time: str = Field(
+        default=..., 
+        description="Scheduled departure time. Must be 24-hour HH:MM format. (e.g., \"22:15\")"
+    )
+    arrival_time: str = Field(
+        default=..., 
+        description="Scheduled arrival time. Must be 24-hour HH:MM format. (e.g., \"04:50\")"
+    )
+    duration: str = Field(
+        default=..., 
+        description="Total journey duration as a float string in hours. (e.g., \"7.50\" for 7h 30m, \"7.45\" for 7h 45m)"
+    )
+    price_in_rs: int = Field(
+        default=..., 
+        description="Base ticket price in Rupees. (e.g., 350)"
+    )
+    seats_available: int = Field(
+        default=..., 
+        description="Number of available seats. (e.g., 20)"
+    )
+    via_route: Optional[List[str]] = Field(
+        default=None, 
+        description="List of key intermediate stops on the route. (e.g., [\"TIRUPATHUR\", \"VELLORE\"])"
+    )
 
-    total_kms: Optional[str] = Field(default=None, description="Approximate total distance in kilometers.")
-    child_fare: Optional[str] = Field(default=None, description="Child fare, if available (can be 'NA').")
+    total_kms: Optional[str] = Field(
+        default=None, 
+        description="Approximate total distance in kilometers. (e.g., \"308.00\")"
+    )
+    child_fare: Optional[str] = Field(
+        default=None, 
+        description="Child fare, if available. Use 'NA' if not applicable. (e.g., \"175\" or \"NA\")"
+    )
 
     model_config = {
         "json_schema_extra": {
@@ -96,7 +141,7 @@ class BusService(BaseModel):
                 hours, minutes = v.split(':')
                 total_hours = int(hours) + (int(minutes) / 60)
                 if total_hours <= 0:
-                     raise ValueError('duration must be positive')
+                        raise ValueError('duration must be positive')
                 
                 # Return as standardized float string, e.g., "7.50"
                 return f"{total_hours:.2f}" 
@@ -106,7 +151,7 @@ class BusService(BaseModel):
             # Handle float string format (e.g., "7.45") from the old parser
             try:
                 if float(v) <= 0:
-                    raise ValueError('duration must be positive')
+                        raise ValueError('duration must be positive')
                 
                 # Already in the correct format
                 return v
@@ -132,21 +177,45 @@ class BusService(BaseModel):
 class SearchRequest(BaseModel):
     """Input model defining the required parameters for a bus search, now including optional filters."""
 
-    from_place_name: str = Field(default=..., description="Starting city name.")
-    to_place_name: str = Field(default=..., description="Destination name.")
-    onward_date: str = Field(default=..., description="Travel date in DD/MM/YYYY.")
-    return_date: Optional[str] = Field(default=None, description="Optional return date or one-way.")
+    from_place_name: str = Field(
+        default=..., 
+        description="Starting city name. (e.g., \"Dharmapuri\")"
+    )
+    to_place_name: str = Field(
+        default=..., 
+        description="Destination name. (e.g., \"CHENNAI-PT DR. M.G.R. BS\")"
+    )
+    onward_date: str = Field(
+        default=..., 
+        description="Travel date in DD/MM/YYYY format. (e.g., \"09/11/2025\")"
+    )
+    return_date: Optional[str] = Field(
+        default=None, 
+        description="Optional return date in DD/MM/YYYY format. (e.g., \"15/11/2025\")"
+    )
 
     # Filter Fields
-    min_price_in_rs: Optional[int] = Field(default=100, description="Minimum allowed ticket price in Rupees (default: 100).")
-    max_price_in_rs: Optional[int] = Field(default=1000, description="Maximum allowed ticket price in Rupees (default: 1000).")
+    min_price_in_rs: Optional[int] = Field(
+        default=100, 
+        description="Minimum allowed ticket price in Rupees. (e.g., 200)"
+    )
+    max_price_in_rs: Optional[int] = Field(
+        default=1000, 
+        description="Maximum allowed ticket price in Rupees. (e.g., 800)"
+    )
     
-    min_departure_time: Optional[str] = Field(default="00:00", description="Earliest desired departure time (HH:MM, default: 00:00).") 
-    max_departure_time: Optional[str] = Field(default="23:59", description="Latest desired departure time (HH:MM, default: 23:59).") 
+    min_departure_time: Optional[str] = Field(
+        default="00:00", 
+        description="Earliest desired departure time. Must be HH:MM format. (e.g., \"18:00\")"
+    ) 
+    max_departure_time: Optional[str] = Field(
+        default="23:59", 
+        description="Latest desired departure time. Must be HH:MM format. (e.g., \"23:59\")"
+    ) 
     
     allowed_bus_types: Optional[List[str]] = Field(
         default=None, 
-        description="List of preferred bus type strings. If None, all types are allowed."
+        description="List of preferred bus type strings. If None, all types are allowed. (e.g., [\"AC SLEEPER\", \"ULTRA DELUXE\"])"
     )
 
     model_config = {
@@ -197,10 +266,22 @@ class SearchRequest(BaseModel):
 
 class ResponseMetadata(BaseModel):
     """Contains metadata about the search request and response."""
-    search_timestamp: datetime = Field(..., description="Timestamp of when the search was executed.")
-    parser_strategy: str = Field(..., description="The parsing strategy used (e.g., 'beautifulsoup', 'gemini').")
-    total_services_found_before_filtering: int = Field(..., description="Total services found before applying filters.")
-    limit_applied: Optional[int] = Field(default=None, description="The 'limit' parameter used for the search, if any.")
+    search_timestamp: datetime = Field(
+        ..., 
+        description="Timestamp of when the search was executed. (e.g., \"2025-11-12T17:30:00.123456\")"
+    )
+    parser_strategy: str = Field(
+        ..., 
+        description="The parsing strategy used. (e.g., 'beautifulsoup', 'gemini')"
+    )
+    total_services_found_before_filtering: int = Field(
+        ..., 
+        description="Total services found before applying filters. (e.g., 25)"
+    )
+    limit_applied: Optional[int] = Field(
+        default=None, 
+        description="The 'limit' parameter used for the search, if any. (e.g., 10)"
+    )
 
 
 class BusSearchResponse(BaseModel):
@@ -267,5 +348,5 @@ class BusServiceWithReasoning(BusService):
     """
     llm_reasoning: Optional[str] = Field(
         default=None, 
-        description="A concise summary of the LLM's decision-making process, including the source (Detail/Main HTML) for Price, Duration, Bus Type, and Seats."
+        description="**LLM REASONING ONLY:** A concise, step-by-step summary of how you found each value. For Price, Duration, and Seats, you MUST specify if the value came from the 'Main List HTML' or the 'Details Page HTML'. (e.g., 'Price (350) and Seats (20) from Main List. Duration (7.45) from Details Page.' Also include how fallbacks were decided and why ?)"
     )
