@@ -10,6 +10,8 @@ from pydantic import ValidationError
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from utils.clean_html import minify_html
+
 from .prompt_builder import PromptGenerator
 
 from ..schemas import BusService, BusServiceWithReasoning
@@ -36,7 +38,7 @@ class GeminiParser:
 
             self.prompt_gen = PromptGenerator()
 
-            self.structured_llm = self.llm.with_structured_output(BusService)
+            self.structured_llm = self.llm.with_structured_output(BusServiceWithReasoning)
         except ImportError:
             log.error("LangChain Google GENAI library not found. Please install 'langchain-google-genai'")
             raise
@@ -228,8 +230,8 @@ class GeminiParser:
         # 2. Create tasks to parse each bus using the two HTML sources
         parsing_tasks = []
         for idx, bus_div in enumerate(bus_divs):
-            main_list_html = str(bus_div)
-            detail_table_html = all_details_html[idx]
+            main_list_html = minify_html(str(bus_div))
+            detail_table_html = minify_html(all_details_html[idx])
             
             parsing_tasks.append(
                 self._parse_bus_with_langchain(
