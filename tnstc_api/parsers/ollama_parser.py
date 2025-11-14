@@ -7,11 +7,11 @@ from ..schemas import BusService
 import asyncio
 import logging
 import re
-from ..config import OLLAMA_MODEL, OLLAMA_CONCURRENCY_LIMIT, TNSTC_DETAILS_URL, OLLAMA_BASE_URL, OLLAMA_LOAD_TIMEOUT
+from ..config import OLLAMA_MODEL, OLLAMA_CONCURRENCY_LIMIT, TNSTC_DETAILS_URL, OLLAMA_BASE_URL
 from tenacity import wait_exponential, stop_after_attempt, Retrying
 
-from langchain_ollama import ChatOllama
-from langchain_core.messages import HumanMessage, SystemMessage
+import ollama
+import json
 
 from utils.clean_html import minify_html
 from .prompt_builder import PromptGenerator
@@ -20,33 +20,31 @@ log = logging.getLogger(__name__)
 
 class OllamaParser:
     """
-    Implements the BusParser interface using a local LLM (via LangChain's ChatOllama)
-    to parse HTML content chunk by chunk.
+    Implements the BusParser interface using a local LLM (via the native 'ollama' client)
+    to parse HTML content chunk by chunk using JSON mode.
     """
 
     def __init__(self):
         
         try:
-            self.llm = ChatOllama(
-                model=OLLAMA_MODEL, 
-                base_url=OLLAMA_BASE_URL
-            )
-
+            self.client = ollama.AsyncClient(host=OLLAMA_BASE_URL)
+            self.model = OLLAMA_MODEL
             self.prompt_gen = PromptGenerator()
+            
+            self.json_schema = BusService.model_json_schema()
 
-            self.structured_llm = self.llm.with_structured_output(BusService, method="json_mode")
-            log.info(f"OllamaParser initialized. Timeout set to {OLLAMA_LOAD_TIMEOUT}s (from env).")
+            self.system_prompt = self.prompt_gen.build_system_prompt(BusService)
+
+            log.info(f"OllamaParser initialized with native client. Model: {self.model}. Base URL: {OLLAMA_BASE_URL}")
             
         except ImportError:
-            log.error("LangChain Ollama library not found. Please install 'langchain-ollama'")
+            log.error("Ollama library not found. Please install 'ollama'")
             raise
         except Exception as e:
-            log.error(f"Failed to initialize Ollama LLM: {e}")
+            log.error(f"Failed to initialize Ollama client: {e}")
             raise
-        
-        self.system_prompt = self.prompt_gen.build_system_prompt(BusService)
 
-    async def _parse_chunk_with_langchain(
+    async def _parse_chunk_with_ollama(
         self,
         main_list_html: str,
         detail_table_html: str,
@@ -54,7 +52,7 @@ class OllamaParser:
     ) -> Optional[BusService]:
         """
         Sends a single HTML chunk to the Ollama API for parsing and validation
-        using LangChain's structured output. This method is retryable via tenacity.
+        using the native 'ollama' client's JSON mode. This method is retryable via tenacity.
         """
         
         user_prompt = f"""
@@ -77,8 +75,8 @@ class OllamaParser:
         """
         
         messages = [
-            SystemMessage(content=self.system_prompt),
-            HumanMessage(content=user_prompt)
+            {'role': 'system', 'content': self.system_prompt},
+            {'role': 'user', 'content': user_prompt}
         ]
         
         retry_config = Retrying(
@@ -87,25 +85,37 @@ class OllamaParser:
             reraise=True
         )
 
+        json_content = "" 
         for attempt in retry_config:
             with attempt:
-                log.info(f"LLM_Parser Bus {bus_index} (Attempt {attempt.retry_state.attempt_number}): Sending HTML (Main: {len(main_list_html)} chars, Detail: {len(detail_table_html)} chars) to LLM for structured extraction.") 
+                log.info(f"LLM_Parser Bus {bus_index} (Attempt {attempt.retry_state.attempt_number}): Sending HTML (Main: {len(main_list_html)} chars, Detail: {len(detail_table_html)} chars) to Ollama for JSON extraction.") 
 
                 try:
-                    service = await self.structured_llm.ainvoke(messages)
+                    response = await self.client.chat(
+                        model=self.model,
+                        messages=messages,
+                        
+                        format=self.json_schema,
+                        options={
+                            'temperature': 0.0
+                        }
+                    )
 
-                    if isinstance(service, BusService):
-                        log.info(f"LLM_Parser Bus {bus_index} SUCCESS: Extracted details for '{service.operator}' (Price: {service.price_in_rs}, Trip: {service.trip_code}).") 
-                        return service
-                    else:
-                        log.error(f"OllamaParser: Bus {bus_index}: LangChain returned unexpected type: {type(service)}")
-                        raise TypeError("LLM returned wrong type")
+                    json_content = response['message']['content']
+                    
+                    service = BusService.model_validate_json(json_content)
 
+                    log.info(f"LLM_Parser Bus {bus_index} SUCCESS: Extracted details for '{service.operator}' (Price: {service.price_in_rs}, Trip: {service.trip_code}).") 
+                    return service
+                
+                except json.JSONDecodeError as e:
+                    log.error(f"LLM_Parser Bus {bus_index}: Failed to decode JSON from LLM. Content: '{json_content[:150]}...'. Error: {e}", exc_info=True)
+                    raise
                 except ValidationError as e:
-                    log.error(f"LLM_Parser Bus {bus_index}: Pydantic validation failed. Input: '{user_prompt[:50]}...'. Error: {e}", exc_info=True) 
+                    log.error(f"LLM_Parser Bus {bus_index}: Pydantic validation failed. Input: '{json_content[:150]}...'. Error: {e}", exc_info=True) 
                     raise
                 except Exception as e:
-                    log.error(f"OLLAMA_LOAD_TIMEOUT may be too low. Error during LangChain invocation: {e}")
+                    log.error(f"OLLAMA_LOAD_TIMEOUT may be too low. Error during Ollama chat invocation: {e}", exc_info=True)
                     raise
 
 
@@ -124,7 +134,7 @@ class OllamaParser:
             async with semaphore:
                 log.info(f"OllamaParser: [SEMAPHORE ACQUIRED] Bus {idx}. Remaining slots: {semaphore._value}") 
                 try:
-                    return await self._parse_chunk_with_langchain(
+                    return await self._parse_chunk_with_ollama(
                         main_list_html, 
                         detail_table_html, 
                         idx
@@ -165,7 +175,7 @@ class OllamaParser:
         If 'limit' is provided, it will only process the first 'n' buses.
         """
         
-        log.info(f"Using OllamaParser with model {OLLAMA_MODEL} (LangChain strategy)...")
+        log.info(f"Using OllamaParser with model {OLLAMA_MODEL} (Native client strategy)...")
         semaphore = asyncio.Semaphore(OLLAMA_CONCURRENCY_LIMIT)
         log.info(f"Ollama concurrency limited to {OLLAMA_CONCURRENCY_LIMIT} simultaneous requests.")
 
