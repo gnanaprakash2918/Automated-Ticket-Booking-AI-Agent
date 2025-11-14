@@ -87,11 +87,11 @@ class GeminiParser:
         6. price and seats: prefer MAIN_LIST_HTML, use details list as fallback if not found.
             * `price_in_rs` (e.g., 195)
             * `seats_available` (e.g., 43)
-            * `via_route` (e.g., from "Via-KARUR , DINDIGUL"). Look strictly in the MAIN_LIST_HTML. Find the text starting with "Via-". 
-            It is often inside a <small> or <b> tag (e.g., <b>Via-HOSUR</b>). 
-            Extract the text after "Via-" as a list. If the text is "Via-HOSUR", output ["HOSUR"]. 
-            Find the text "Via-". The value is a list of the places that follow. 
-            (e.g., from `Via-KARUR , DINDIGUL`, the via_route is ["KARUR", "DINDIGUL"]). 
+            * `via_route`: Look in `MAIN_LIST_HTML` for text starting with "Via-". 
+                (e.g., "Via-HOSUR"). Extract the place(s) as a JSON list. 
+                Example: "Via-HOSUR" MUST become `["HOSUR"]`.
+                Example: "Via-KARUR , DINDIGUL" MUST become `["KARUR", "DINDIGUL"]`.
+                If not found, return `null`.
 
         2.  **FROM MAIN_LIST_HTML (Special Tags):**
             * `trip_code`: This is the long code inside the `<a>` tag.
@@ -109,12 +109,10 @@ class GeminiParser:
                 (Example: `...</a></b> / 100J` -> "100J")
             * trip_code vs route_code: They are different fields. Do not confuse them. trip_code is the long one (0005SALMADMM01L), route_code is the short one (104N1).
                 
-
-        3.  **FROM DETAIL_TABLE_HTML (Supplementary Source):**
-            * `total_kms`: Look for a label "Approx. Kms" or "Total Kms" and get its value (e.g., "208.00").\
-            Look in the `DETAIL_TABLE_HTML` for a label like "Approx. Kms" or "Total Kms" or something similar and extract the numeric value next to it (e.g., "253.00").
-            Look strictly in the DETAIL_TABLE_HTML. Search for the label "Total" followed by "Kms". 
-            It may contain &nbsp; or asterisks (*). The value is in the <strong> tag immediately following it (e.g., <strong>208.00</strong>). Extract the number.
+            * **`total_kms`**: Look in `DETAIL_TABLE_HTML` for the label "Total Kms" or or something similar.
+                The label might have an asterisk: "Total Kms * :". 
+                The value is the number immediately following it (e.g., "208.00").
+                If not found, you MUST return "NA".
             * `child_fare`: Look for a child fare.
 
         Failure Handling:
