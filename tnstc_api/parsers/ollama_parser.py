@@ -54,38 +54,67 @@ class OllamaParser:
         Sends a single HTML chunk to the Ollama API for parsing and validation
         using the native 'ollama' client's JSON mode. This method is retryable via tenacity.
         """
-        
+
         user_prompt = f"""
+        You will be given two HTML fragments.
+        1. MAIN_LIST_HTML: Contains the primary data for a single bus.
+        2. DETAIL_TABLE_HTML: Contains supplementary data for the same bus.
+        
+        TASK:
+        Extract every available field defined in the JSON_SCHEMA from these HTML fragments and merge data from both sources.
+
+        ---
         MAIN_LIST_HTML
         {main_list_html}
-        
         ---
-
         DETAIL_TABLE_HTML
         {detail_table_html}
+        ---
 
         TASK:
-        Extract every available field defined in the JSON_SCHEMA from these HTML fragments.
+        Extract all fields for a single JSON object. Follow these rules STRICTLY.
 
-        ---
-        Extraction Hints (Follow these carefully):
-        1.  trip_code: Find the <a> tag. The trip_code is the text inside it. extract the text inside MAIN_LIST_HTML <b><a>...</a></b> (trim whitespace). If not found there, check DETAIL_TABLE_HTML.
-            (e.g., from `<a> 0005SALMADMM01L</a>`, the trip_code is "0005SALMADMM01L").
-        2.  route_code: This is the value usually (not everytime though) immediately after the " / " separator. often follows the trip code or appears near it; check MAIN_LIST_HTML first.
-            (e.g., from `...</a></b> / 104N1`, the route_code is "104N1").
-        3.  via_route: Find the text "Via-". The value is a list of the places that follow. 
-            (e.g., from `Via-KARUR , DINDIGUL`, the via_route is ["KARUR", "DINDIGUL"]).
-        4.  trip_code vs route_code: They are different fields. Do not confuse them. 
-            trip_code is the long one (0005SALMADMM01L), route_code is the short one (104N1).
-        5.  duration: Use the value ending in "Hrs" (e.g., "6.10Hrs" becomes "6.10"). return a normalized float-string in hours with 2 decimals. (6h10m -> "6.17")
+        **Data Location Rules (CRITICAL):**
+        
+        1.  **FROM MAIN_LIST_HTML (Primary Source):**
+            * `operator` (e.g., "SALEM")
+            * `bus_type` (e.g., "AC 3X2")
+            * `departure_time` (e.g., "00:05")
+            * `arrival_time` (e.g., "06:15")
+            * `duration` (e.g., "6.10Hrs") Use the value ending in "Hrs" (e.g., "6.10Hrs" becomes "6.10"). return a normalized float-string in hours with 2 decimals. (6h10m -> "6.17")
         6. price and seats: prefer MAIN_LIST_HTML, use details list as fallback if not found.
-        7. total_kms: Look in the `DETAIL_TABLE_HTML` for a label like "Approx. Kms" or "Total Kms" or something similar and extract the numeric value next to it (e.g., "253.00").
-        8. If a value is not found, return "NA".
-        9. Return only the JSON object, nothing else.
+            * `price_in_rs` (e.g., 195)
+            * `seats_available` (e.g., 43)
+            * `via_route` (e.g., from "Via-KARUR , DINDIGUL"). Find the text "Via-". The value is a list of the places that follow. 
+            (e.g., from `Via-KARUR , DINDIGUL`, the via_route is ["KARUR", "DINDIGUL"]).
 
-        Trip code pattern hint: look for the longest contiguous alphanumeric uppercase token of length >=8 (e.g., 0005SALMADMM01L).
+        2.  **FROM MAIN_LIST_HTML (Special Tags):**
+            * `trip_code`: This is the long code inside the `<a>` tag.
+            Trip code pattern hint: look for the longest contiguous alphanumeric uppercase token of length >=8 (e.g., 0005SALMADMM01L).
+            Find the <a> tag. The trip_code is the text inside it. extract the text inside MAIN_LIST_HTML <b><a>...</a></b> (trim whitespace). If not found there, check DETAIL_TABLE_HTML.
+                (e.g., from `<a> 0005SALMADMM01L</a>`, the trip_code is "0005SALMADMM01L").
+                (Example: `<a> 0005SALMADMM01L</a>` -> "0005SALMADMM01L")
+                (Example: `<a> 0030SALBANDD02A</a>` -> "0030SALBANDD02A")
+                THIS IS *NOT* THE DEPARTURE TIME.
+            * `route_code`: This is the short code after the " / " separator.
+                This is the value usually (not everytime though) immediately after the " / " separator. 
+                Often follows the trip code or appears near it; check MAIN_LIST_HTML first.
+                (e.g., from `...</a></b> / 104N1`, the route_code is "104N1").
+                (Example: `...</a></b> / 104N1` -> "104N1")
+                (Example: `...</a></b> / 100J` -> "100J")
+            * trip_code vs route_code: They are different fields. Do not confuse them. trip_code is the long one (0005SALMADMM01L), route_code is the short one (104N1).
+                
 
-        ---
+        3.  **FROM DETAIL_TABLE_HTML (Supplementary Source):**
+            * `total_kms`: Look for a label "Approx. Kms" or "Total Kms" and get its value (e.g., "208.00").\
+            Look in the `DETAIL_TABLE_HTML` for a label like "Approx. Kms" or "Total Kms" or something similar and extract the numeric value next to it (e.g., "253.00").
+            * `child_fare`: Look for a child fare.
+
+        Failure Handling:
+        * If `trip_code` or `route_code` are not in the `MAIN_LIST_HTML`, you *must* return "NA". DO NOT GUESS.
+        * If `total_kms` is not in the `DETAIL_TABLE_HTML`, you *must* return "NA".
+        * If `via_route` is not present, return `null`.
+        * If a value is not found, return "NA".
 
         Return:
         → A single JSON object that conforms exactly to the JSON_SCHEMA provided in the system prompt.
