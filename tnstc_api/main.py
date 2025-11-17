@@ -8,10 +8,10 @@ from fastapi import FastAPI, HTTPException
 from .schemas import SearchRequest, BusSearchResponse, ResponseMetadata
 import asyncio
 import logging
-from utils.logging_setup import setup_logging
-from .config import TNSTC_BASE_URL, PARSER_STRATEGY
+from .config import TNSTC_BASE_URL, PARSER_STRATEGY, GEMINI_MODEL, OLLAMA_MODEL, APP_ENV
 from typing import Optional
 from datetime import datetime
+from utils.logging_setup import setup_logging
 
 setup_logging()
 log = logging.getLogger(__name__)
@@ -47,6 +47,17 @@ async def check_health():
         "status" : "ok",
         "message" : "TNSTC API Wrapper is running."
     }
+
+@app.get("/config_info", tags=['Diagnostics'])
+async def get_config_info():
+    """Returns non-sensitive runtime configuration."""
+    return {
+        "parser_strategy": PARSER_STRATEGY,
+        "gemini_model": GEMINI_MODEL,
+        "ollama_model": OLLAMA_MODEL,
+        "app_env": APP_ENV
+    }
+
 
 @app.post("/search_buses", response_model=BusSearchResponse, status_code=status.HTTP_200_OK) 
 async def search_buses(
