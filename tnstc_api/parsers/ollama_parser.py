@@ -113,9 +113,9 @@ class OllamaParser:
         * DO NOT GUESS.
 
         Return:
-        → A single JSON object that conforms exactly to the JSON_SCHEMA provided in the system prompt.
-        → Do not include any extra text, comments, or markdown.
-        → Output strictly raw JSON.
+        -> A single JSON object that conforms exactly to the JSON_SCHEMA provided in the system prompt.
+        -> Do not include any extra text, comments, or markdown.
+        -> Output strictly raw JSON.
         """
         
         messages = [
@@ -140,7 +140,7 @@ class OllamaParser:
                     f"Sending {message_size} total chars to Ollama. "
                     f"Breakdown: System={system_size}, User={user_size}, "
                     f"HTML Input (Main={len(main_list_html)}, Detail={len(detail_table_html)}) "
-                    f"→ JSON extraction."
+                    f"-> JSON extraction."
                 )
 
                 self.total_chars_sent += message_size

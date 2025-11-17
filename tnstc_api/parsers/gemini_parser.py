@@ -124,10 +124,10 @@ class GeminiParser:
         * If a value is not found, return "NA".
 
         Return:
-        → A single JSON object that conforms exactly to the JSON_SCHEMA provided in the system prompt.
-        → Do not include any extra text, comments, or markdown.
-        → If a value is not found, return "NA" for that field (or `null` for `via_route`).
-        → Output strictly raw JSON.
+        -> A single JSON object that conforms exactly to the JSON_SCHEMA provided in the system prompt.
+        -> Do not include any extra text, comments, or markdown.
+        -> If a value is not found, return "NA" for that field (or `null` for `via_route`).
+        -> Output strictly raw JSON.
         """
 
         messages = [
