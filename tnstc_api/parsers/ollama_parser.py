@@ -34,6 +34,8 @@ class OllamaParser:
             self.json_schema = BusService.model_json_schema()
 
             self.system_prompt = self.prompt_gen.build_system_prompt(BusService)
+            
+            self.few_shot_examples = self.prompt_gen._build_few_shot_examples()
 
             log.info(f"OllamaParser initialized with native client. Model: {self.model}. Base URL: {OLLAMA_BASE_URL}")
             
@@ -56,13 +58,16 @@ class OllamaParser:
         """
 
         user_prompt = f"""
-        You will be given two HTML fragments.
-        1. MAIN_LIST_HTML: Contains the primary data for a single bus.
-        2. DETAIL_TABLE_HTML: Contains supplementary data for the same bus.
+        You will be given two HTML fragments and examples of how to parse them.
         
         TASK:
-        Extract every available field defined in the JSON_SCHEMA from these HTML fragments and merge data from both sources.
+        Extract every available field defined in the JSON_SCHEMA from the new HTML fragments provided at the end.
+        Merge data from both sources.
+        
+        {self.few_shot_examples}
 
+        ---
+        NEW TASK
         ---
         MAIN_LIST_HTML
         {main_list_html}
@@ -72,7 +77,8 @@ class OllamaParser:
         ---
 
         TASK:
-        Extract all fields for a single JSON object. Follow these rules STRICTLY.
+        Extract all fields for a single JSON object based on the new data above.
+        Follow the rules STRICTLY.
 
         **Data Location Rules (CRITICAL):**
         
@@ -81,48 +87,31 @@ class OllamaParser:
             * `bus_type` (e.g., "AC 3X2")
             * `departure_time` (e.g., "00:05")
             * `arrival_time` (e.g., "06:15")
-            * `duration` (e.g., "6.10Hrs") Use the value ending in "Hrs" (e.g., "6.10Hrs" becomes "6.10"). return a normalized float-string in hours with 2 decimals. (6h10m -> "6.17")
-        6. price and seats: prefer MAIN_LIST_HTML, use details list as fallback if not found.
-            * `price_in_rs` (e.g., 195)
-            * `seats_available` (e.g., 43)
-            * `via_route`: Look in `MAIN_LIST_HTML` for text starting with "Via-". 
-                (e.g., "Via-HOSUR"). Extract the place(s) as a JSON list. 
-                Example: "Via-HOSUR" MUST become `["HOSUR"]`.
-                Example: "Via-KARUR , DINDIGUL" MUST become `["KARUR", "DINDIGUL"]`.
-                If not found, return `null`.
+            * `duration`: Extract the text value (e.g., "6.10Hrs" becomes "6.10").
+            * `price_in_rs`: (e.g., 195)
+            * `seats_available`: (e.g., 43)
+            * `via_route`: Look for "Via-". Example: "Via-HOSUR" MUST become `["HOSUR"]`. If not found, return `null`.
+            Example: "Via-KARUR , DINDIGUL" MUST become `["KARUR", "DINDIGUL"]`.
+            If not found, return `null`.
 
         2.  **FROM MAIN_LIST_HTML (Special Tags):**
-            * `trip_code`: This is the long code inside the `<a>` tag.
-            Trip code pattern hint: look for the longest contiguous alphanumeric uppercase token of length >=8 (e.g., 0005SALMADMM01L).
-            Find the <a> tag. The trip_code is the text inside it. extract the text inside MAIN_LIST_HTML <b><a>...</a></b> (trim whitespace). If not found there, check DETAIL_TABLE_HTML.
-                (e.g., from `<a> 0005SALMADMM01L</a>`, the trip_code is "0005SALMADMM01L").
-                (Example: `<a> 0005SALMADMM01L</a>` -> "0005SALMADMM01L")
-                (Example: `<a> 0030SALBANDD02A</a>` -> "0030SALBANDD02A")
-                THIS IS *NOT* THE DEPARTURE TIME.
-            * `route_code`: This is the short code after the " / " separator.
-                This is the value usually (not everytime though) immediately after the " / " separator. 
-                Often follows the trip code or appears near it; check MAIN_LIST_HTML first.
-                (e.g., from `...</a></b> / 104N1`, the route_code is "104N1").
-                (Example: `...</a></b> / 104N1` -> "104N1")
-                (Example: `...</a></b> / 100J` -> "100J")
+            * `trip_code`: Extract text inside the <a> tag (e.g., "0005SALMADMM01L"). 
+            Trip code pattern hint: look for the longest contiguous alphanumeric uppercase token of length >=8 (e.g., 0005SALMADMM01L
+            * `route_code`: Extract the short code after the " / " separator (e.g., "104N1").
+            * **CRITICAL:** `trip_code` and `route_code` are *ONLY* in `MAIN_LIST_HTML`. Do not look for them in `DETAIL_TABLE_HTML`.
             * trip_code vs route_code: They are different fields. Do not confuse them. trip_code is the long one (0005SALMADMM01L), route_code is the short one (104N1).
-                
-            * **`total_kms`**: Look in `DETAIL_TABLE_HTML` for the label "Total Kms" or or something similar.
-                The label might have an asterisk: "Total Kms * :". 
-                The value is the number immediately following it (e.g., "208.00").
-                If not found, you MUST return "NA".
+
+        3.  **FROM DETAIL_TABLE_HTML (Secondary Source):**
+            * `total_kms`: Look for the label "Total Kms" and extract its value (e.g., "208.00"). The numeric value might be in the next strong tag or somewhere nearby.
             * `child_fare`: Look for a child fare.
 
         Failure Handling:
-        * If `trip_code` or `route_code` are not in the `MAIN_LIST_HTML`, you *must* return "NA". DO NOT GUESS.
-        * If `total_kms` is not in the `DETAIL_TABLE_HTML`, you *must* return "NA".
-        * If `via_route` is not present, return `null`.
-        * If a value is not found, return "NA".
+        * If any value is not found in its specified location, return "NA" (or `null` for `via_route`).
+        * DO NOT GUESS.
 
         Return:
         → A single JSON object that conforms exactly to the JSON_SCHEMA provided in the system prompt.
         → Do not include any extra text, comments, or markdown.
-        → If a value is not found, return "NA" for that field (or `null` for `via_route`).
         → Output strictly raw JSON.
         """
         
@@ -145,9 +134,8 @@ class OllamaParser:
                 try:
                     response = await self.client.chat(
                         model=self.model,
-                        messages=messages,
-                        
-                        format=self.json_schema,
+                        messages=messages,                        
+                        format='json',
                         options={
                             'temperature': 0.0
                         }
