@@ -3,23 +3,26 @@ from typing import List, Optional
 import logging
 from tenacity import wait_exponential, stop_after_attempt, Retrying
 import asyncio
-import re
 from bs4 import BeautifulSoup
 from pydantic import ValidationError
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from utils.helpers import minify_html
+from utils.helpers import minify_html, calculate_message_size
 
 from .prompt_builder import PromptGenerator
+from .base import AbstractBusParser 
 
 from ..schemas import BusService, BusServiceWithReasoning
-from ..config import GEMINI_API_KEY, GEMINI_MODEL, TNSTC_DETAILS_URL, GEMINI_LOAD_TIMEOUT
+from ..config import GEMINI_API_KEY, GEMINI_MODEL, GEMINI_LOAD_TIMEOUT
 
+from utils.logging_setup import setup_logging
+
+setup_logging()
 log = logging.getLogger(__name__)
 
-class GeminiParser:
+class GeminiParser(AbstractBusParser):
     """
     Implements the BusParser interface using the LangChain Google Generative AI
     model with its native structured output feature.
@@ -47,6 +50,8 @@ class GeminiParser:
             raise
         
         self.system_prompt = self.prompt_gen.build_system_prompt(BusService)
+        self.total_chars_sent = 0
+        self.total_requests = 0
             
     async def _parse_bus_with_langchain(
         self,
@@ -143,7 +148,11 @@ class GeminiParser:
 
         for attempt in retry_config:
             with attempt:
-                log.info(f"LLM_Parser Bus {bus_index} (Attempt {attempt.retry_state.attempt_number}): Sending HTML (Main: {len(main_list_html)} chars, Detail: {len(detail_table_html)} chars) to LLM for structured extraction.") 
+                message_size = calculate_message_size(messages)
+                self.total_chars_sent += message_size
+                self.total_requests += 1
+
+                log.info(f"LLM_Parser Bus {bus_index} (Attempt {attempt.retry_state.attempt_number}): Sending HTML (Main: {len(main_list_html)} chars, Detail: {len(detail_table_html)} chars) to LLM for structured extraction. Chars sent: {message_size}.") 
                 
                 try:
                     service_with_reasoning = await self.structured_llm.ainvoke(messages)
@@ -165,27 +174,6 @@ class GeminiParser:
                 except Exception as e:
                     log.error(f"GeminiParser: Bus {bus_index}: Failed during LangChain invocation: {e}")
                     raise
-
-
-    async def _call_load_trip_details(self, client: httpx.AsyncClient, onclick_attr: str, bus_index: int) -> str:
-        """Extracts arguments and calls the LoadTripDetails endpoint."""
-        args = re.findall(r"'([^']*)'", str(onclick_attr))
-        if len(args) < 6:
-            log.error(f"Failed to parse onclick_attr: {onclick_attr}")
-            return ""
-
-        data = {
-            "ServiceID": args[0], "TripCode": args[1], "StartPlaceID": args[2],
-            "EndPlaceID": args[3], "JourneyDate": args[4], "ClassID": args[5],
-        }
-
-        try:
-            response = await client.post(TNSTC_DETAILS_URL, data=data)
-            response.raise_for_status()
-            return response.text
-        except httpx.RequestError as e:
-            log.error(f"Network error calling loadTripDetails for bus {bus_index}: {e}")
-            return ""
 
     async def parse(
         self, 
@@ -252,5 +240,10 @@ class GeminiParser:
             elif isinstance(res, Exception):
                 log.error(f"GeminiParser: Bus {idx}: Failed final parsing attempt after retries. Error: {res}")
 
-        log.info(f"GeminiParser: Successfully parsed {len(bus_services)} / {len(bus_divs)} bus services.")
+        avg_chars = self.total_chars_sent / max(self.total_requests, 1)
+
+        log.info(f"GeminiParser: Successfully parsed {len(bus_services)} / {len(bus_divs)} bus services. "
+                 f"Summary: {self.total_requests} requests, {self.total_chars_sent} total chars sent, "
+                 f"avg {avg_chars:.0f} chars/request.")
+        
         return bus_services

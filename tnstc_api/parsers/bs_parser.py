@@ -5,11 +5,14 @@ from ..schemas import BusService
 import re
 import asyncio
 import logging
-from ..config import TNSTC_DETAILS_URL
+from .base import AbstractBusParser
 
+from utils.logging_setup import setup_logging
+
+setup_logging()
 log = logging.getLogger(__name__)
 
-class BeautifulSoupParser:
+class BeautifulSoupParser(AbstractBusParser):
     """
     Implements the BusParser interface using BeautifulSoup for high-speed,
     selector-based HTML parsing.    
@@ -23,11 +26,6 @@ class BeautifulSoupParser:
     ) -> List[BusService]:
         """
         Parses the raw HTML search results into a structured list of BusService models.
-
-        It first tries to get detailed data by calling 'loadTripDetails' for each bus
-        concurrently.
-        
-        If 'limit' is provided, it will only process the first 'n' buses.
         """
         soup = BeautifulSoup(html_content, 'lxml')
         bus_services: List[BusService] = []
@@ -178,26 +176,6 @@ class BeautifulSoupParser:
                         via_route_list = [stop.strip() for stop in route_string.split(',') if stop.strip()]
                         log.debug(f"BS_Parser: Extracted via route: {via_route_list}")
         return via_route_list
-
-    async def _call_load_trip_details(self, client: httpx.AsyncClient, onclick_attr: str, bus_index: int) -> str:
-        """Extracts arguments and calls the LoadTripDetails endpoint."""
-        args = re.findall(r"'([^']*)'", str(onclick_attr))
-        if len(args) < 6:
-            log.error(f"Failed to parse onclick_attr: {onclick_attr}")
-            return ""
-
-        data = {
-            "ServiceID": args[0], "TripCode": args[1], "StartPlaceID": args[2],
-            "EndPlaceID": args[3], "JourneyDate": args[4], "ClassID": args[5],
-        }
-
-        try:
-            response = await client.post(TNSTC_DETAILS_URL, data=data)
-            response.raise_for_status()
-            return response.text
-        except httpx.RequestError as e:
-            log.error(f"Network error calling loadTripDetails for bus {bus_index}: {e}")
-            return ""
 
     def _parse_details_from_trip_html(self, trip_html: str) -> Optional[Dict[str, Any]]:
         """Helper to parse the detailed HTML from _call_load_trip_details."""

@@ -7,7 +7,7 @@ from ..schemas import BusService
 import asyncio
 import logging
 import re
-from ..config import OLLAMA_MODEL, OLLAMA_CONCURRENCY_LIMIT, TNSTC_DETAILS_URL, OLLAMA_BASE_URL
+from ..config import OLLAMA_MODEL, OLLAMA_CONCURRENCY_LIMIT, OLLAMA_BASE_URL
 from tenacity import wait_exponential, stop_after_attempt, Retrying
 
 import ollama
@@ -15,10 +15,14 @@ import json
 
 from utils.helpers import minify_html, calculate_message_size
 from .prompt_builder import PromptGenerator
+from .base import AbstractBusParser 
 
+from utils.logging_setup import setup_logging
+
+setup_logging()
 log = logging.getLogger(__name__)
 
-class OllamaParser:
+class OllamaParser(AbstractBusParser):
     """
     Implements the BusParser interface using a local LLM (via the native 'ollama' client)
     to parse HTML content chunk by chunk using JSON mode.
@@ -76,7 +80,7 @@ class OllamaParser:
         {main_list_html}
         ---
         DETAIL_TABLE_HTML
-        {detail_table_html}
+        {minify_html(detail_table_html)}
         ---
 
         TASK:
@@ -99,9 +103,8 @@ class OllamaParser:
 
         2.  **FROM MAIN_LIST_HTML (Special Tags):**
             * `trip_code`: Extract text inside the <a> tag (e.g., "0005SALMADMM01L"). 
-            Trip code pattern hint: look for the longest contiguous alphanumeric uppercase token of length >=8 (e.g., 0005SALMADMM01L
-            * `route_code`: Extract the short code after the " / " separator (e.g., "104N1").
-            * **CRITICAL:** `trip_code` and `route_code` are *ONLY* in `MAIN_LIST_HTML`. Do not look for them in `DETAIL_TABLE_HTML`.
+            Trip code pattern hint: look for the longest contiguous alphanumeric uppercase token of length >=8 (e.g., 0005SALMADMM01L). **Look in MAIN_LIST_HTML first, use DETAIL_TABLE_HTML as a fallback.**
+            * `route_code`: Extract the short code after the " / " separator (e.g., "104N1"). **Look in MAIN_LIST_HTML first, use DETAIL_TABLE_HTML as a fallback.**
             * trip_code vs route_code: They are different fields. Do not confuse them. trip_code is the long one (0005SALMADMM01L), route_code is the short one (104N1).
 
         3.  **FROM DETAIL_TABLE_HTML (Secondary Source):**
@@ -200,26 +203,6 @@ class OllamaParser:
                     )
                 finally:
                     log.debug(f"OllamaParser: [SEMAPHORE RELEASED] Finished chunk {idx}.")
-
-    async def _call_load_trip_details(self, client: httpx.AsyncClient, onclick_attr: str, bus_index: int) -> str:
-        """Extracts arguments and calls the LoadTripDetails endpoint."""
-        args = re.findall(r"'([^']*)'", str(onclick_attr))
-        if len(args) < 6:
-            log.error(f"Failed to parse onclick_attr: {onclick_attr}")
-            return ""
-
-        data = {
-            "ServiceID": args[0], "TripCode": args[1], "StartPlaceID": args[2],
-            "EndPlaceID": args[3], "JourneyDate": args[4], "ClassID": args[5],
-        }
-
-        try:
-            response = await client.post(TNSTC_DETAILS_URL, data=data)
-            response.raise_for_status()
-            return response.text
-        except httpx.RequestError as e:
-            log.error(f"Network error calling loadTripDetails for bus {bus_index}: {e}")
-            return ""
 
     async def parse(
         self, 
