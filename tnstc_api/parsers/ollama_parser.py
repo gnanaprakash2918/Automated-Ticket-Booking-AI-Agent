@@ -13,7 +13,7 @@ from tenacity import wait_exponential, stop_after_attempt, Retrying
 import ollama
 import json
 
-from utils.clean_html import minify_html
+from utils.helpers import minify_html, calculate_message_size
 from .prompt_builder import PromptGenerator
 
 log = logging.getLogger(__name__)
@@ -36,6 +36,9 @@ class OllamaParser:
             self.system_prompt = self.prompt_gen.build_system_prompt(BusService)
             
             self.few_shot_examples = self.prompt_gen._build_few_shot_examples()
+
+            self.total_chars_sent = 0
+            self.total_requests = 0
 
             log.info(f"OllamaParser initialized with native client. Model: {self.model}. Base URL: {OLLAMA_BASE_URL}")
             
@@ -119,6 +122,10 @@ class OllamaParser:
             {'role': 'system', 'content': self.system_prompt},
             {'role': 'user', 'content': user_prompt}
         ]
+
+        message_size = calculate_message_size(messages)
+        system_size = len(self.system_prompt)
+        user_size = len(user_prompt)
         
         retry_config = Retrying(
             wait=wait_exponential(multiplier=1, min=2, max=30),
@@ -129,7 +136,15 @@ class OllamaParser:
         json_content = "" 
         for attempt in retry_config:
             with attempt:
-                log.info(f"LLM_Parser Bus {bus_index} (Attempt {attempt.retry_state.attempt_number}): Sending HTML (Main: {len(main_list_html)} chars, Detail: {len(detail_table_html)} chars) to Ollama for JSON extraction.") 
+                log.info( f"LLM_Parser Bus {bus_index} (Attempt {attempt.retry_state.attempt_number}): "
+                    f"Sending {message_size} total chars to Ollama. "
+                    f"Breakdown: System={system_size}, User={user_size}, "
+                    f"HTML Input (Main={len(main_list_html)}, Detail={len(detail_table_html)}) "
+                    f"→ JSON extraction."
+                )
+
+                self.total_chars_sent += message_size
+                self.total_requests += 1
 
                 try:
                     response = await self.client.chat(
@@ -145,7 +160,11 @@ class OllamaParser:
                     
                     service = BusService.model_validate_json(json_content)
 
-                    log.info(f"LLM_Parser Bus {bus_index} SUCCESS: Extracted details for '{service.operator}' (Price: {service.price_in_rs}, Trip: {service.trip_code}).") 
+                    log.info( f"LLM_Parser Bus {bus_index} SUCCESS: Extracted '{service.operator}' "
+                        f"(Price: {service.price_in_rs}, Trip: {service.trip_code}). "
+                        f"Cumulative: {self.total_requests} requests, {self.total_chars_sent} chars sent."
+                    )
+
                     return service
                 
                 except json.JSONDecodeError as e:
@@ -272,6 +291,13 @@ class OllamaParser:
             elif isinstance(res, Exception):
                 log.error(f"OllamaParser: Bus {idx}: Failed final parsing attempt after retries. Error: {res}")
         
-        log.info(f"OllamaParser: Successfully parsed {len(bus_services)} / {len(bus_divs)} bus services.")
+        avg_chars = self.total_chars_sent / max(self.total_requests, 1)
+
+        log.info(
+            f"OllamaParser: Successfully parsed {len(bus_services)} / {len(bus_divs)} bus services. "
+            f"Summary: {self.total_requests} requests, {self.total_chars_sent} total chars sent, "
+            f"avg {avg_chars:.0f} chars/request."
+        )
+
         
         return bus_services

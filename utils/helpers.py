@@ -1,5 +1,6 @@
 from bs4 import BeautifulSoup, Comment
 import re
+from typing import List
 
 def minify_html(html: str) -> str:
     """
@@ -40,3 +41,11 @@ def minify_html(html: str) -> str:
     compact = re.sub(r"\s+", " ", compact)
     compact = re.sub(r">\s+<", "><", compact)
     return compact.strip()
+
+
+def calculate_message_size(messages: List[dict]) -> int:
+    """Calculate total characters in all messages."""
+    total = 0
+    for msg in messages:
+        total += len(msg.get('content', ''))
+    return total
