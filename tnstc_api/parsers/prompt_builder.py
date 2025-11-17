@@ -7,6 +7,7 @@ from typing import Type, Any, get_args
 import json
 import json
 import inspect
+from utils.clean_html import minify_html
 
 def _get_base_type(type_hint: Any) -> Any:
     """Recursively resolves the inner type from complex type hints (e.g., Optional, List)."""
@@ -67,3 +68,89 @@ class PromptGenerator:
         """
 
         return system_content
+
+    def _build_few_shot_examples(self) -> str:
+        """
+        Creates a string of examples to guide the LLM.
+        Easy to extend - just add dicts to the examples list.
+        """
+        
+        examples = [
+            {
+                "main_html": """<div class="bus-list" data-bus-type="AC 3X2" data-time="00:30"><div class="bus-item">...[FULL HTML]...</div></div>""",
+                "detail_html": """<html><body><form><table>...[FULL HTML]...</table></form></body></html>""",
+                "json_output": {
+                    "operator": "SALEM",
+                    "bus_type": "AC 3X2",
+                    "trip_code": "0030SALBANDD02A",
+                    "route_code": "100J",
+                    "departure_time": "00:30",
+                    "arrival_time": "05:30",
+                    "duration": "5.00",
+                    "price_in_rs": 269,
+                    "seats_available": 41,
+                    "via_route": ["HOSUR"],
+                    "total_kms": "208.00",
+                    "child_fare": "NA"
+                }
+            },
+            {
+                "main_html": """<div class="bus-list" data-bus-type="AC 3X2" data-time="00:30"><div class="bus-item">...[FULL HTML]...</div></div>""",
+                "detail_html": """<html><body><form><table>...[FULL HTML]...</table></form></body></html>""",
+                "json_output": {
+                    "operator": "SALEM",
+                    "bus_type": "DELUXE 3X2",
+                    "trip_code": "0100SALBANDD01L",
+                    "route_code": "100A",
+                    "departure_time": "01:00",
+                    "arrival_time": "06:00",
+                    "duration": "5.00",
+                    "price_in_rs": 229,
+                    "seats_available": 39,
+                    "via_route": ["HOSUR"],
+                    "total_kms": "208.00",
+                    "child_fare": "NA"
+                }
+            },
+            {
+                "main_html": """<div class="bus-list" data-bus-type="DELUXE 3X2" data-time="01:00"><div class="bus-item">...[FULL HTML]...</div></div>""",
+                "detail_html": """<html><body><form><table>...[FULL HTML]...</table></form></body></html>""",
+                "json_output": {
+                    "operator": "SALEM",
+                    "bus_type": "DELUXE 3X2",
+                    "trip_code": "0300SALBANDD01L",
+                    "route_code": "100L",
+                    "departure_time": "03:00",
+                    "arrival_time": "08:00",
+                    "duration": "5.00",
+                    "price_in_rs": 229,
+                    "seats_available": 38,
+                    "via_route": ["HOSUR"],
+                    "total_kms": "208.00",
+                    "child_fare": "NA"
+                }
+            }
+        ]
+        
+        prompt_parts = ["Here are some examples of how to extract the data:\n"]
+        
+        for idx, example in enumerate(examples, 1):
+            prompt_parts.append(f"""
+            ---
+            EXAMPLE {idx}
+            ---
+            MAIN_LIST_HTML
+            {minify_html(example["main_html"])}
+            ---
+            DETAIL_TABLE_HTML
+            {minify_html(example["detail_html"])}
+            ---
+            CORRECT JSON OUTPUT
+            {json.dumps(example["json_output"], indent=2)}
+            ---
+            END EXAMPLE {idx}
+            ---
+            """)
+        
+        prompt_parts.append("\nNow, perform the same task on the new data provided below.")
+        return "".join(prompt_parts)
