@@ -105,27 +105,6 @@ def minify_html(html: str,
     for b in list(soup.find_all("b", class_="boxheader")):
         h = soup.new_tag("h2"); h["class"] = "boxheader"; h.string = b.get_text(strip=True); b.replace_with(h)
 
-    fare_match = soup.find(string=re.compile(r"Adult\s+Fare", re.I))
-    if fare_match:
-        # try to find numeric value nearby
-        price = None
-        parent = fare_match if isinstance(fare_match, Tag) else fare_match.parent
-        if parent:
-            found_num = parent.find_next(string=re.compile(r"\b\d+\b"))
-            price = found_num.strip() if found_num else None
-        if not price:
-            found_num = soup.find(string=re.compile(r"\b\d+\b"))
-            price = found_num.strip() if found_num else "NA"
-        kvfrag = BeautifulSoup("", parser)
-        root = kvfrag.new_tag("div"); root["class"] = "kv-list"
-        kv = kvfrag.new_tag("div"); kv["class"] = "kv"
-        ks = kvfrag.new_tag("span"); ks["class"] = "k"; ks.string = "Adult Fare"
-        vs = kvfrag.new_tag("span"); vs["class"] = "v"; vs.string = price
-        kv.append(ks); kv.append(vs); root.append(kv)
-        if isinstance(parent, Tag):
-            parent.insert_after(root)
-        else:
-            soup.append(root)
 
     removable = {"div","span","section","article","aside","p","li"}
     for tag in list(soup.find_all(True)):
