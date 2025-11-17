@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from utils.helpers import minify_html, calculate_message_size
+from utils.helpers import minify_html # Keep import for other uses, but won't use it here
 
 from .prompt_builder import PromptGenerator
 from .base import AbstractBusParser 
@@ -148,7 +148,7 @@ class GeminiParser(AbstractBusParser):
 
         for attempt in retry_config:
             with attempt:
-                message_size = calculate_message_size(messages)
+                message_size = sum(len(m.content) for m in messages)
                 self.total_chars_sent += message_size
                 self.total_requests += 1
 

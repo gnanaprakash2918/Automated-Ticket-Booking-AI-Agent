@@ -1,0 +1,261 @@
+import asyncio
+import httpx
+import logging
+from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
+from rich.text import Text
+from datetime import date
+from typing import Any, List, Dict
+
+from tnstc_api.schemas import SearchRequest, BusService
+from tnstc_api.tnstc_client import get_place_info
+from tnstc_api.parsers.bs_parser import BeautifulSoupParser
+from tnstc_api.parsers.gemini_parser import GeminiParser
+from tnstc_api.parsers.ollama_parser import OllamaParser
+from utils.logging_setup import setup_logging
+
+TEST_DATE = date(2025, 12, 19).strftime("%d/%m/%Y") 
+TEST_REQUEST = SearchRequest(
+    from_place_name="SALEM",
+    to_place_name="BENGALURU",
+    onward_date=TEST_DATE,
+    max_departure_time="10:00",
+)
+
+LIMIT_BUSES = 5
+
+log = logging.getLogger("ConsistencyTestRunner")
+console = Console()
+PARSERS_MAP = {
+    "beautifulsoup": BeautifulSoupParser,
+    "gemini": GeminiParser,
+    "ollama": OllamaParser,
+}
+
+CRITICAL_FIELDS = ["trip_code", "route_code", "bus_type", "departure_time", "arrival_time", "duration"]
+NON_CRITICAL_FIELDS = ["operator", "price_in_rs", "seats_available", "via_route", "total_kms", "child_fare"]
+
+
+def compare_service_fields(service_a: BusService, service_b: BusService, parser_a: str, parser_b: str) -> Dict[str, Any]:
+    diffs = {}
+    
+    dict_a = service_a.model_dump(exclude_none=True, mode='json')
+    dict_b = service_b.model_dump(exclude_none=True, mode='json')
+
+    all_keys = set(dict_a.keys()) | set(dict_b.keys())
+    
+    for key in all_keys:
+        val_a = dict_a.get(key)
+        val_b = dict_b.get(key)
+        
+        if val_a == val_b:
+            continue
+        
+        if key == "price_in_rs" and val_a is not None and val_b is not None:
+             if abs(int(val_a) - int(val_b)) <= 1:
+                continue
+
+        if isinstance(val_a, list) and isinstance(val_b, list):
+            if set(val_a) == set(val_b):
+                continue
+
+        is_critical = key in CRITICAL_FIELDS
+        diffs[key] = {
+            parser_a: val_a,
+            parser_b: val_b,
+            "critical": is_critical
+        }
+    return diffs
+
+
+def get_comparison_summary(all_results: Dict[str, List[BusService]]) -> List[Dict[str, Any]]:
+    bs_results = all_results.get('beautifulsoup', [])
+    summary = []
+    
+    max_buses = len(bs_results)
+
+    for i in range(max_buses):
+        bus_summary = {
+            "index": i,
+            "reference_trip_code": bs_results[i].trip_code if i < len(bs_results) else "N/A",
+            "bs_service": bs_results[i] if i < len(bs_results) else None,
+            "comparisons": {}
+        }
+        
+        for other_parser_name, other_results in all_results.items():
+            if other_parser_name == 'beautifulsoup':
+                continue
+
+            if i < len(other_results):
+                other_service = other_results[i]
+                diffs = compare_service_fields(
+                    bs_results[i], 
+                    other_service, 
+                    "beautifulsoup", 
+                    other_parser_name
+                )
+                bus_summary["comparisons"][other_parser_name] = {
+                    "diffs": diffs,
+                    "service": other_service,
+                    "consistent": not bool(diffs)
+                }
+            else:
+                 bus_summary["comparisons"][other_parser_name] = {
+                    "diffs": {"count": f"Missing (BS={max_buses}, {other_parser_name}={len(other_results)})"},
+                    "service": None,
+                    "consistent": False
+                }
+                
+        summary.append(bus_summary)
+
+    return summary
+
+
+async def run_parser(parser_name: str, client: httpx.AsyncClient, html_content: str, limit: int) -> List[BusService]:
+    try:
+        ParserClass = PARSERS_MAP[parser_name]
+        parser = ParserClass()
+        return await parser.parse(client, html_content, limit)
+    except Exception as e:
+        log.error(f"FATAL ERROR in {parser_name} parser execution: {e}", exc_info=True)
+        return []
+
+
+async def main_test_runner():
+    setup_logging()
+    
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            from_place, to_place = await asyncio.gather(
+                get_place_info(client, TEST_REQUEST.from_place_name, is_from_place=True),
+                get_place_info(client, TEST_REQUEST.to_place_name, is_from_place=False)
+            )
+
+            payload = {
+                'hiddenStartPlaceID': from_place.id,
+                'hiddenEndPlaceID': to_place.id,
+                'txtStartPlaceCode': from_place.code,
+                'txtEndPlaceCode': to_place.code,
+                'hiddenStartPlaceName': from_place.name,
+                'hiddenEndPlaceName': to_place.name,
+                'matchStartPlace': from_place.name,
+                'matchEndPlace': to_place.name,
+                'selectStartPlace': from_place.code,
+                'selectEndPlace': to_place.code,
+                'txtJourneyDate': TEST_REQUEST.onward_date,
+                'hiddenOnwardJourneyDate': TEST_REQUEST.onward_date,
+                'hiddenAction': 'SearchService', 
+                'languageType': 'E',
+                'checkSingleLady': 'N',
+            }
+            
+            initial_search_url = "https://www.tnstc.in/OTRSOnline/jqreq.do?hiddenAction=SearchService"
+            response = await client.post(initial_search_url, data=payload)
+            response.raise_for_status()
+            initial_html = response.text
+            
+            log.info(f"Successfully fetched initial search HTML. Starting concurrent parsing for {LIMIT_BUSES} buses.")
+
+        except Exception as e:
+            log.critical(f"Initial setup/network failure. Cannot run tests: {e}")
+            console.print(Panel(f"[bold red]CRITICAL SETUP FAILURE:[/bold red] {e}", title="Test Aborted"))
+            return
+
+        parser_tasks = {
+            name: run_parser(name, client, initial_html, LIMIT_BUSES)
+            for name in PARSERS_MAP.keys()
+        }
+        
+        all_results = await asyncio.gather(*parser_tasks.values(), return_exceptions=False)
+        all_results = dict(zip(parser_tasks.keys(), all_results))
+        
+    summary = get_comparison_summary(all_results)
+
+    console.rule("[bold yellow]Parser Consistency Check Results[/bold yellow]")
+    log.info(f"Consistency check completed for {len(summary)} bus services.")
+    
+    overall_consistent_count = 0
+
+    for bus in summary:
+        ref_trip = bus['reference_trip_code']
+        bs_service = bus['bs_service']
+
+        if bs_service is None:
+            console.print(Panel(f"[red]Bus {bus['index']} (Ref: N/A):[/red] BeautifulSoup failed to extract this service.", style="bold red"))
+            log.warning(f"Bus {bus['index']}: BS service is None.")
+            continue
+
+        bus_table = Table(
+            title=f"[bold cyan]Bus #{bus['index'] + 1}[/bold cyan] | Trip Code: [bold green]{ref_trip}[/bold green] | Type: {bs_service.bus_type}",
+            show_header=True,
+            header_style="bold magenta",
+            show_footer=False
+        )
+        bus_table.add_column("Field", style="bold yellow")
+        bus_table.add_column("BS Value", style="bold white")
+        bus_table.add_column("Gemini", justify="center")
+        bus_table.add_column("Ollama", justify="center")
+
+        is_bus_fully_consistent = True
+        
+        all_fields = list(BusService.model_fields.keys())
+
+        for field in all_fields:
+            if field in ["llm_reasoning", "explanation"]:
+                continue
+            
+            bs_val = getattr(bs_service, field, None)
+            
+            gemini_comp = bus['comparisons'].get('gemini', {})
+            ollama_comp = bus['comparisons'].get('ollama', {})
+
+            gemini_diffs = gemini_comp.get('diffs', {})
+            ollama_diffs = ollama_comp.get('diffs', {})
+            
+            gemini_val = getattr(gemini_comp.get('service'), field, bs_val)
+            ollama_val = getattr(ollama_comp.get('service'), field, bs_val)
+
+            if field in gemini_diffs or field in ollama_diffs:
+                is_bus_fully_consistent = False
+                field_style = "bold red" if field in CRITICAL_FIELDS else "bold orange3"
+                
+                gemini_text = Text(str(gemini_diffs.get(field, gemini_val)), style="red")
+                ollama_text = Text(str(ollama_diffs.get(field, ollama_val)), style="red")
+            else:
+                field_style = "bold white"
+                gemini_text = Text(str(gemini_val), style="green")
+                ollama_text = Text(str(ollama_val), style="green")
+
+            bus_table.add_row(
+                Text(field, style=field_style),
+                str(bs_val),
+                gemini_text,
+                ollama_text
+            )
+
+        console.print(bus_table)
+        
+        if is_bus_fully_consistent:
+            overall_consistent_count += 1
+            console.print(Text(f"--> Bus {ref_trip}: Fully consistent across all parsers.", style="bold green"))
+            log.info(f"Bus {ref_trip}: Fully consistent.")
+        else:
+            console.print(Text(f"--> Bus {ref_trip}: Differences found (see highlighted fields above).", style="bold red"))
+            log.warning(f"Bus {ref_trip}: Inconsistent results detected. Diffs: {bus['comparisons']}")
+        
+        console.print("\n")
+
+
+    final_panel_style = "bold green" if overall_consistent_count == len(summary) else "bold yellow"
+    console.print(Panel(
+        f"Processed {len(summary)} services.\n"
+        f"Services with full consistency: [b]{overall_consistent_count}[/b] / {len(summary)}",
+        title="[bold blue]Overall Test Summary[/bold blue]",
+        style=final_panel_style
+    ))
+    log.info(f"Overall Test Summary: {overall_consistent_count} / {len(summary)} services fully consistent.")
+
+
+if __name__ == "__main__":
+    asyncio.run(main_test_runner())
