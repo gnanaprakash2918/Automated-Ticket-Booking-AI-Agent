@@ -1,10 +1,13 @@
 import logging
 from ..config import PARSER_STRATEGY
-from .base import BusParser
+from .base import AbstractBusParser as BusParser
 from .bs_parser import BeautifulSoupParser
 from .gemini_parser import GeminiParser
 from .ollama_parser import OllamaParser
 
+from utils.logging_setup import setup_logging
+
+setup_logging()
 log = logging.getLogger(__name__)
 
 _parser_instance: BusParser = None # type: ignore
