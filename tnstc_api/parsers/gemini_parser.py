@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from utils.clean_html import minify_html
+from utils.helpers import minify_html
 
 from .prompt_builder import PromptGenerator
 
