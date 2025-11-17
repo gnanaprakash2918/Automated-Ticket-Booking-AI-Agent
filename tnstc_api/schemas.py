@@ -73,7 +73,7 @@ class BusService(BaseModel):
     )
     duration: str = Field(
         default=..., 
-        description="Total journey duration as a float string in hours. (e.g., \"7.50\" for 7h 30m, \"7.45\" for 7h 45m)"
+        description="Total journey duration as a float string in decimal hours (H.HH). (e.g., \"7.50\" for 7h 30m, \"7.75\" for 7h 45m)"
     )
     price_in_rs: int = Field(
         default=..., 
@@ -93,7 +93,7 @@ class BusService(BaseModel):
         description="Approximate total distance in kilometers. (e.g., \"308.00\")"
     )
     child_fare: Optional[str] = Field(
-        default=None, 
+        default="NA", 
         description="Child fare, if available. Use 'NA' if not applicable. (e.g., \"175\" or \"NA\")"
     )
 
