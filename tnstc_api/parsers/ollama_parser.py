@@ -13,7 +13,6 @@ from tenacity import wait_exponential, stop_after_attempt, Retrying
 import ollama
 import json
 
-from utils.clean_html import minify_html
 from .prompt_builder import PromptGenerator
 
 log = logging.getLogger(__name__)
@@ -253,23 +252,25 @@ class OllamaParser:
                 future.set_result("")
                 detail_tasks.append(future)
                 log.warning(f"OllamaParser Bus {idx}: No 'onclick' attribute found. Cannot fetch details.")
-        
+
+        # 1. Create tasks to fetch detailed HTML for all buses in parallel
         log.info(f"OllamaParser: Awaiting concurrent detail fetch for {len(detail_tasks)} buses...")
         all_details_html = await asyncio.gather(*detail_tasks, return_exceptions=True)
 
         # 2. Create tasks to parse each bus using the two HTML sources
         tasks = []
         for idx, bus_div in enumerate(bus_divs):
-            main_list_html = re.sub(r"[\r\n]+", "", str(bus_div))
-            detail_table_html = re.sub(r"[\r\n]+", "", str(all_details_html[idx]))
-
-            main_list_html = minify_html(main_list_html)
-            detail_table_html = minify_html(detail_table_html)
+            main_soup = BeautifulSoup(str(bus_div), 'lxml')
+            main_list_text = main_soup.get_text(separator=' ', strip=True)
+            
+            detail_soup = BeautifulSoup(str(all_details_html[idx]), 'lxml')
+            detail_table_text = detail_soup.get_text(separator='\n', strip=True)
+            
             tasks.append(
                 self._wrapper_parse_chunk(
                     semaphore, 
-                    main_list_html, 
-                    detail_table_html, 
+                    main_list_text,
+                    detail_table_text,
                     idx
                 )
             )
