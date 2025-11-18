@@ -6,6 +6,7 @@ __pycache__/
 # Custom
 temp/
 .vscode/
+retrieved_htmls.txt
 
 # C extensions
 *.so

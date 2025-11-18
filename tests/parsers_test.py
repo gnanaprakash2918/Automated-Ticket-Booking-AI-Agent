@@ -7,6 +7,7 @@ from rich.panel import Panel
 from rich.text import Text
 from datetime import date
 from typing import Any, List, Dict
+from pathlib import Path
 
 from tnstc_api.schemas import SearchRequest, BusService
 from tnstc_api.tnstc_client import get_place_info
@@ -14,6 +15,8 @@ from tnstc_api.parsers.bs_parser import BeautifulSoupParser
 from tnstc_api.parsers.gemini_parser import GeminiParser
 from tnstc_api.parsers.ollama_parser import OllamaParser
 from utils.logging_setup import setup_logging
+
+OUT_HTML_LOG = Path(__file__).with_name("retrieved_htmls.txt")
 
 TEST_DATE = date(2025, 12, 20).strftime("%d/%m/%Y") 
 TEST_REQUEST = SearchRequest(
@@ -34,6 +37,15 @@ PARSERS_MAP = {
 
 CRITICAL_FIELDS = ["trip_code", "route_code", "bus_type", "departure_time", "arrival_time", "duration"]
 NON_CRITICAL_FIELDS = ["operator", "price_in_rs", "seats_available", "via_route", "total_kms", "child_fare"]
+
+async def append_html_to_log(lock: asyncio.Lock, name: str, html: str, out_path: Path = OUT_HTML_LOG) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    async with lock:
+        with open(out_path, "a", encoding="utf-8") as fh:
+            fh.write(f"{name}\n")
+            fh.write(html)
+            fh.write("\n\n---HTML_BLOCK_END---\n\n")
 
 def compare_service_fields(service_a: BusService, service_b: BusService, parser_a: str, parser_b: str) -> Dict[str, Any]:
     diffs = {}
@@ -108,8 +120,10 @@ def get_comparison_summary(all_results: Dict[str, List[BusService]]) -> List[Dic
 
     return summary
 
-async def run_parser(parser_name: str, client: httpx.AsyncClient, html_content: str, limit: int) -> List[BusService]:
+async def run_parser(parser_name: str, client: httpx.AsyncClient, html_content: str, limit: int, write_lock: asyncio.Lock) -> List[BusService]:
     try:
+        await append_html_to_log(write_lock, f"{parser_name}.html", html_content)
+
         ParserClass = PARSERS_MAP[parser_name]
         parser = ParserClass()
         return await parser.parse(client, html_content, limit)
@@ -119,6 +133,7 @@ async def run_parser(parser_name: str, client: httpx.AsyncClient, html_content: 
 
 async def main_test_runner():
     setup_logging()
+    write_lock = asyncio.Lock()
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         try:
@@ -131,7 +146,7 @@ async def main_test_runner():
                 'hiddenStartPlaceID': from_place.id,
                 'hiddenEndPlaceID': to_place.id,
                 'txtStartPlaceCode': from_place.code,
-                'txtEndPlaceCode': to_place.code,
+                'txtEndPlace': to_place.code if hasattr(to_place, 'code') else to_place.code,
                 'hiddenStartPlaceName': from_place.name,
                 'hiddenEndPlaceName': to_place.name,
                 'matchStartPlace': from_place.name,
@@ -150,6 +165,8 @@ async def main_test_runner():
             response.raise_for_status()
             initial_html = response.text
 
+            await append_html_to_log(write_lock, "initial_search.html", initial_html)
+
             log.info(f"Successfully fetched initial search HTML. Starting concurrent parsing for {LIMIT_BUSES} buses.")
 
         except Exception as e:
@@ -158,7 +175,7 @@ async def main_test_runner():
             return
 
         parser_tasks = {
-            name: run_parser(name, client, initial_html, LIMIT_BUSES)
+            name: run_parser(name, client, initial_html, LIMIT_BUSES, write_lock)
             for name in PARSERS_MAP.keys()
         }
 

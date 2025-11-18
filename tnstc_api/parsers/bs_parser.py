@@ -3,7 +3,6 @@ from typing import List, Optional, Dict, Any
 from bs4 import BeautifulSoup, Tag
 from ..schemas import BusService
 import re
-import asyncio
 import logging
 from .base import AbstractBusParser
 
@@ -29,7 +28,6 @@ class BeautifulSoupParser(AbstractBusParser):
         soup = BeautifulSoup(html_content, 'lxml')
         bus_services: List[BusService] = []
             
-        detail_tasks = []
         temp_data_list = []
         bus_divs = soup.find_all('div', class_ = 'bus-list')
         
@@ -39,7 +37,7 @@ class BeautifulSoupParser(AbstractBusParser):
             log.info(f"BeautifulSoupParser: Applying limit of {limit} buses.")
             bus_divs = bus_divs[:limit]
 
-        # Scrape main list and create detail-call tasks
+        # Scrape main list and prepare for sequential detail fetch
         for idx, bus_div in enumerate(bus_divs):
             try:
                 # 1. Get data ONLY available in the main list 'bus_div'
@@ -50,16 +48,6 @@ class BeautifulSoupParser(AbstractBusParser):
                 # 1.4 Onclick attribute - Load Trip Details
                 a_tag = bus_div.find("a", attrs={"data-target": "#TripcodePopUp", "onclick": True})
                 onclick_attr = a_tag.get("onclick", "") if a_tag else ""
-
-                # 2. Add task to get detailed HTML
-                if onclick_attr:
-                    detail_tasks.append(self._call_load_trip_details(client, str(onclick_attr), idx))
-                    log.debug(f"BS_Parser Bus {idx}: Extracted {len(re.findall(r"'([^']*)'", str(onclick_attr)))} trip detail call arguments from onclick: {onclick_attr[:50]}...")
-                else:
-                    future = asyncio.Future()
-                    future.set_result("")
-                    detail_tasks.append(future)
-                    log.warning(f"BS_Parser Bus {idx}: No 'onclick' attribute found. Cannot fetch details.")
                     
                 temp_data_list.append({
                     "bus_type": bus_type,
@@ -70,14 +58,20 @@ class BeautifulSoupParser(AbstractBusParser):
                 
             except Exception as e:
                 log.error(f"Critical error in bs_parser (Pass 1) for bus {idx}: {e}")
-                future = asyncio.Future()
-                future.set_result("")
-                detail_tasks.append(future)
                 temp_data_list.append(None)
 
-        # 3. Run all detail tasks in parallel
-        log.info(f"BeautifulSoupParser: Awaiting concurrent detail fetch for {len(detail_tasks)} buses...")
-        all_details_html = await asyncio.gather(*detail_tasks)
+        # 3. Fetch detailed HTML SEQUENTIALLY to avoid server state race conditions
+        all_details_html = []
+        log.info(f"BeautifulSoupParser: Starting sequential detail fetch for {len(temp_data_list)} buses...")
+        
+        for idx, data_item in enumerate(temp_data_list):
+            if data_item and data_item.get("onclick_attr"):
+                detail_html = await self._call_load_trip_details(client, str(data_item["onclick_attr"]), idx)
+                all_details_html.append(detail_html)
+            else:
+                if data_item: 
+                    log.warning(f"BS_Parser Bus {idx}: No 'onclick' attribute found. Cannot fetch details.")
+                all_details_html.append("")
 
         # 4. Combine main list data with detail data using the new hybrid logic
         for idx, details_html in enumerate(all_details_html):
@@ -91,7 +85,7 @@ class BeautifulSoupParser(AbstractBusParser):
                 parsed_details = self._parse_details_from_trip_html(details_html)
                 fallback_data = self._parse_details_from_bus_div(bus_div, main_list_data.get("onclick_attr"))
 
-                # 3. Create the final service_data, starting with fallback as base
+                # 3. Create the final service_data, starting with fallback as base (Primary Source of Truth)
                 service_data = {
                     'operator': fallback_data.get('operator', 'N/A'),
                     'trip_code': fallback_data.get('trip_code', 'N/A'),
@@ -109,20 +103,37 @@ class BeautifulSoupParser(AbstractBusParser):
 
                 # 4. Selectively overwrite with data from parsed_details
                 if parsed_details:
-                    # Protect the Trip/Route code found in Main List from being overwritten by potentially stale Detail data
-                    if service_data.get('trip_code') not in [None, "N/A", ""]:
-                        parsed_details.pop('trip_code', None)
-                        parsed_details.pop('route_code', None)
+                    # PRIMARY SOURCE OF TRUTH ENFORCEMENT
+                    # The following fields are visible in the Main List. We must NOT overwrite them 
+                    # with data from the Detail Popup unless the Main List data is missing/invalid.
+                    # Detail Popup often has conflicting "scheduled" times vs "actual" times in Main List.
+                    sot_main_list_fields = {
+                        'trip_code', 'route_code', 'departure_time', 
+                        'arrival_time', 'duration', 'price_in_rs'
+                    }
 
-                    service_data.update({k: v for k, v in parsed_details.items() if v})
-                    
-                    try:
-                        price_str = parsed_details.get('price_in_rs_str')
-                        if price_str:
-                            service_data['price_in_rs'] = int(price_str)
-                    except (ValueError, TypeError):
-                        pass
-                    
+                    for k, v in parsed_details.items():
+                        if not v: continue
+                        
+                        # If it's a primary key and we already have valid data from Main List, SKIP overwrite
+                        if k in sot_main_list_fields:
+                            current_val = service_data.get(k)
+                            # Check validity: not None, not "N/A", not empty, and not 0 (for numeric price)
+                            if current_val not in [None, "N/A", "", 0]:
+                                continue
+
+                        # Special handling for price string conversion from details (if Main List price was 0)
+                        if k == 'price_in_rs_str':
+                            if service_data.get('price_in_rs', 0) == 0:
+                                try:
+                                    service_data['price_in_rs'] = int(v)
+                                except (ValueError, TypeError):
+                                    pass
+                            continue
+
+                        # Safe to update secondary fields (operator, total_kms, child_fare, etc.)
+                        service_data[k] = v
+
                     total_kms = parsed_details.get('total_kms')
                     child_fare = parsed_details.get('child_fare', "NA")
                 
@@ -285,6 +296,7 @@ class BeautifulSoupParser(AbstractBusParser):
             label_cell = row.find('td', attrs={"class": "bodytextWithSecondMainColor"})
             value_cell = row.find('td', attrs={"class": "bodytextWithThirdMainColor"})
             if label_cell and value_cell:
+                # Clean key: "Total Kms * :" -> "Total Kms"
                 label = label_cell.text.replace(':', '').replace('\xa0', ' ').replace('*', '').strip()
                 value = (value_cell.find('strong') or value_cell).text.strip()
                 details_map[label] = value

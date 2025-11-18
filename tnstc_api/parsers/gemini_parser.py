@@ -181,22 +181,21 @@ class GeminiParser(AbstractBusParser):
             log.info(f"GeminiParser: Applying limit of {limit} buses.")
             bus_divs = bus_divs[:limit]
 
-        # 1. Create tasks to fetch detailed HTML for all buses in parallel
-        detail_tasks = []
+        # 1. Fetch detailed HTML for all buses SEQUENTIALLY to avoid server state race conditions
+        all_details_html = []
+        log.info(f"GeminiParser: Starting sequential detail fetch for {len(bus_divs)} buses...")
+        
         for idx, bus_div in enumerate(bus_divs):
             a_tag = bus_div.find("a", attrs={"data-target": "#TripcodePopUp", "onclick": True})
             onclick_attr = a_tag.get("onclick", "") if a_tag else ""
 
             if onclick_attr:
-                detail_tasks.append(self._call_load_trip_details(client, str(onclick_attr), idx))
+                # Await each request individually
+                detail_html = await self._call_load_trip_details(client, str(onclick_attr), idx)
+                all_details_html.append(detail_html)
             else:
-                future = asyncio.Future()
-                future.set_result("")
-                detail_tasks.append(future)
                 log.warning(f"GeminiParser Bus {idx}: No 'onclick' attribute found. Cannot fetch details.")
-
-        log.info(f"GeminiParser: Awaiting concurrent detail fetch for {len(detail_tasks)} buses...")
-        all_details_html = await asyncio.gather(*detail_tasks)
+                all_details_html.append("")
 
         # 2. Create tasks to parse each bus using the two HTML sources
         parsing_tasks = []
