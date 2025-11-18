@@ -15,7 +15,7 @@ from tnstc_api.parsers.gemini_parser import GeminiParser
 from tnstc_api.parsers.ollama_parser import OllamaParser
 from utils.logging_setup import setup_logging
 
-TEST_DATE = date(2025, 12, 19).strftime("%d/%m/%Y") 
+TEST_DATE = date(2025, 12, 20).strftime("%d/%m/%Y") 
 TEST_REQUEST = SearchRequest(
     from_place_name="SALEM",
     to_place_name="MADURAI",
