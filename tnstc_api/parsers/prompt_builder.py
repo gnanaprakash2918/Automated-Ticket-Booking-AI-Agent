@@ -18,13 +18,7 @@ class PromptGenerator:
         return system_content
 
     def build_cot_user_prompt(self, main_html: str, detail_html: str) -> str:
-        cot_instruction = textwrap.dedent("""
-        ## Extraction Instruction
-        1. Analyze MAIN_LIST_HTML and DETAIL_TABLE_HTML.
-        2. Extract all required fields per the system JSON Schema.
-        3. Provide a concise, high-level mapping rationale (no internal chain-of-thought) and place it under the top-level key "explanation". Keep the explanation to at most 3 short numbered steps.
-        4. Output a single valid JSON object containing the extracted fields and the "explanation" key only.
-        """).strip()
+
         few_shot_examples = self._build_few_shot_examples()
         new_data_section = textwrap.dedent(f"""
         ---
@@ -38,7 +32,7 @@ class PromptGenerator:
         ---
         FINAL JSON OUTPUT
         """)
-        return cot_instruction + "\n\n" + few_shot_examples + "\n" + new_data_section
+        return few_shot_examples + "\n" + new_data_section
 
     def _build_few_shot_examples(self) -> str:
         examples = self._get_raw_examples()

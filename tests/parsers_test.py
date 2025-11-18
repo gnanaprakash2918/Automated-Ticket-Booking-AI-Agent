@@ -22,7 +22,7 @@ TEST_REQUEST = SearchRequest(
     onward_date=TEST_DATE
 )
 
-LIMIT_BUSES = 2
+LIMIT_BUSES = 5
 
 log = logging.getLogger("ConsistencyTestRunner")
 console = Console()
