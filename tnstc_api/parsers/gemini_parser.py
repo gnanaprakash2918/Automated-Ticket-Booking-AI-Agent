@@ -50,6 +50,7 @@ class GeminiParser(AbstractBusParser):
             raise
         
         self.system_prompt = self.prompt_gen.build_system_prompt(BusService)
+        self.few_shot_examples = self.prompt_gen._build_few_shot_examples()
         self.total_chars_sent = 0
         self.total_requests = 0
             
@@ -65,74 +66,57 @@ class GeminiParser(AbstractBusParser):
         """
 
         user_prompt = f"""
-        You will be given two HTML fragments.
-        1. MAIN_LIST_HTML: Contains the primary data for a single bus.
-        2. DETAIL_TABLE_HTML: Contains supplementary data for the same bus.
+        You are an expert parsing engine. You will receive two HTML fragments: a "Main List" item and a "Detail Table" popup.
         
         TASK:
-        Extract every available field defined in the JSON_SCHEMA from these HTML fragments and merge data from both sources.
+        Extract specific fields defined in the JSON_SCHEMA.
+        Merge data from both sources based on the "Source of Truth" hierarchy below.
+        
+        {self.few_shot_examples}
 
+        ---
+        NEW TASK
         ---
         MAIN_LIST_HTML
         {main_list_html}
         ---
         DETAIL_TABLE_HTML
-        {detail_table_html}
+        {minify_html(detail_table_html)}
         ---
 
-        TASK:
-        Extract all fields for a single JSON object. Follow these rules STRICTLY.
+        ### SOURCE OF TRUTH HIERARCHY (CRITICAL RULES)
 
-        **Data Location Rules (CRITICAL):**
+        1. **STATIC DATA (Codes, Distance, Corp):**
+           - **Source of Truth:** DETAIL_TABLE_HTML
+           - **Fallback:** MAIN_LIST_HTML
+           - Fields: `trip_code` (Service Code), `route_code` (Route No), `total_kms`, `operator` (Corporation).
+           - *Note on Trip Code:* If the Detail Table is missing, check the MAIN_LIST <a> tag. If the text inside <a> is truncated (ends in '...'), check the `onclick` attribute arguments.
+
+        2. **DYNAMIC DATA (Price, Seats, Time, Route):**
+           - **Source of Truth:** MAIN_LIST_HTML
+           - **Fallback:** DETAIL_TABLE_HTML
+           - Fields: `price_in_rs`, `seats_available`, `departure_time`, `arrival_time`, `duration`, `via_route`, `bus_type`.
+           - *Note on Price:* Main list price is the booking price. Detail table might show base fare. Use Main List.
+
+        ### FIELD SPECIFIC EXTRACTION LOGIC
+
+        * `via_route`: Look for text starting with "Via-" in MAIN_LIST. Split by comma. 
+            - Example: "Via-KARUR , DINDIGUL" -> ["KARUR", "DINDIGUL"]
+            - Example: "Via-HOSUR" -> ["HOSUR"]
+            - If not found, return `null` (not "NA").
         
-        1.  **FROM MAIN_LIST_HTML (Primary Source):**
-            * `operator` (e.g., "SALEM")
-            * `bus_type` (e.g., "AC 3X2")
-            * `departure_time` (e.g., "00:05")
-            * `arrival_time` (e.g., "06:15")
-            * `duration` (e.g., "6.10Hrs") Use the value ending in "Hrs" (e.g., "6.10Hrs" becomes "6.10"). return a normalized float-string in hours with 2 decimals. (6h10m -> "6.17")
-        6. price and seats: prefer MAIN_LIST_HTML, use details list as fallback if not found.
-            * `price_in_rs` (e.g., 195)
-            * `seats_available` (e.g., 43)
-            * `via_route`: Look in `MAIN_LIST_HTML` for text starting with "Via-". 
-                (e.g., "Via-HOSUR"). Extract the place(s) as a JSON list. 
-                Example: "Via-HOSUR" MUST become `["HOSUR"]`.
-                Example: "Via-KARUR , DINDIGUL" MUST become `["KARUR", "DINDIGUL"]`.
-                If not found, return `null`.
+        * `child_fare`: Strictly from DETAIL_TABLE_HTML "Child Fare" column.
+        
+        * `duration`: Extract the numeric value string. "6.10Hrs" -> "6.10". "5:30" -> "5.30".
+        
+        * `price_in_rs`: Extract integers only. Remove "Rs" or symbols.
 
-        2.  **FROM MAIN_LIST_HTML (Special Tags):**
-            * `trip_code`: This is the long code inside the `<a>` tag.
-            Trip code pattern hint: look for the longest contiguous alphanumeric uppercase token of length >=8 (e.g., 0005SALMADMM01L).
-            Find the <a> tag. The trip_code is the text inside it. extract the text inside MAIN_LIST_HTML <b><a>...</a></b> (trim whitespace). If not found there, check DETAIL_TABLE_HTML.
-                (e.g., from `<a> 0005SALMADMM01L</a>`, the trip_code is "0005SALMADMM01L").
-                (Example: `<a> 0005SALMADMM01L</a>` -> "0005SALMADMM01L")
-                (Example: `<a> 0030SALBANDD02A</a>` -> "0030SALBANDD02A")
-                THIS IS *NOT* THE DEPARTURE TIME.
-            * `route_code`: This is the short code after the " / " separator.
-                This is the value usually (not everytime though) immediately after the " / " separator. 
-                Often follows the trip code or appears near it; check MAIN_LIST_HTML first.
-                (e.g., from `...</a></b> / 104N1`, the route_code is "104N1").
-                (Example: `...</a></b> / 104N1` -> "104N1")
-                (Example: `...</a></b> / 100J` -> "100J")
-            * trip_code vs route_code: They are different fields. Do not confuse them. trip_code is the long one (0005SALMADMM01L), route_code is the short one (104N1).
-                
-            * **`total_kms`**: Look in `DETAIL_TABLE_HTML` for the label "Total Kms" or or something similar.
-                The label might have an asterisk: "Total Kms * :". 
-                The value is the number immediately following it (e.g., "208.00").
-                If not found, you MUST return "NA".
-            * `child_fare`: Look for a child fare.
+        ### FAILURE HANDLING
+        * If a value is missing in Primary AND Fallback sources, return "NA".
+        * Exceptions: `via_route` returns `null`, `price_in_rs` returns `0` if missing.
 
-        Failure Handling:
-        * If `trip_code` or `route_code` are not in the `MAIN_LIST_HTML`, you *must* return "NA". DO NOT GUESS.
-        * If `total_kms` is not in the `DETAIL_TABLE_HTML`, you *must* return "NA".
-        * If `via_route` is not present, return `null`.
-        * If a value is not found, return "NA".
-
-        Return:
-        -> A single JSON object that conforms exactly to the JSON_SCHEMA provided in the system prompt.
-        -> Do not include any extra text, comments, or markdown.
-        -> If a value is not found, return "NA" for that field (or `null` for `via_route`).
-        -> Output strictly raw JSON.
+        ### OUTPUT FORMAT
+        Output strictly raw JSON. No markdown, no conversational text.
         """
 
         messages = [

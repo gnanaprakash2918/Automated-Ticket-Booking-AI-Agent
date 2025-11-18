@@ -65,11 +65,11 @@ class OllamaParser(AbstractBusParser):
         """
 
         user_prompt = f"""
-        You will be given two HTML fragments and examples of how to parse them.
+        You are an expert parsing engine. You will receive two HTML fragments: a "Main List" item and a "Detail Table" popup.
         
         TASK:
-        Extract every available field defined in the JSON_SCHEMA from the new HTML fragments provided at the end.
-        Merge data from both sources.
+        Extract specific fields defined in the JSON_SCHEMA.
+        Merge data from both sources based on the "Source of Truth" hierarchy below.
         
         {self.few_shot_examples}
 
@@ -83,42 +83,39 @@ class OllamaParser(AbstractBusParser):
         {minify_html(detail_table_html)}
         ---
 
-        TASK:
-        Extract all fields for a single JSON object based on the new data above.
-        Follow the rules STRICTLY.
+        ### SOURCE OF TRUTH HIERARCHY (CRITICAL RULES)
 
-        **Data Location Rules (CRITICAL):**
+        1. **STATIC DATA (Codes, Distance, Corp):**
+           - **Source of Truth:** DETAIL_TABLE_HTML
+           - **Fallback:** MAIN_LIST_HTML
+           - Fields: `trip_code` (Service Code), `route_code` (Route No), `total_kms`, `operator` (Corporation).
+           - *Note on Trip Code:* If the Detail Table is missing, check the MAIN_LIST <a> tag. If the text inside <a> is truncated (ends in '...'), check the `onclick` attribute arguments.
+
+        2. **DYNAMIC DATA (Price, Seats, Time, Route):**
+           - **Source of Truth:** MAIN_LIST_HTML
+           - **Fallback:** DETAIL_TABLE_HTML
+           - Fields: `price_in_rs`, `seats_available`, `departure_time`, `arrival_time`, `duration`, `via_route`, `bus_type`.
+           - *Note on Price:* Main list price is the booking price. Detail table might show base fare. Use Main List.
+
+        ### FIELD SPECIFIC EXTRACTION LOGIC
+
+        * `via_route`: Look for text starting with "Via-" in MAIN_LIST. Split by comma. 
+            - Example: "Via-KARUR , DINDIGUL" -> ["KARUR", "DINDIGUL"]
+            - Example: "Via-HOSUR" -> ["HOSUR"]
+            - If not found, return `null` (not "NA").
         
-        1.  **FROM MAIN_LIST_HTML (Primary Source):**
-            * `operator` (e.g., "SALEM")
-            * `bus_type` (e.g., "AC 3X2")
-            * `departure_time` (e.g., "00:05")
-            * `arrival_time` (e.g., "06:15")
-            * `duration`: Extract the text value (e.g., "6.10Hrs" becomes "6.10").
-            * `price_in_rs`: (e.g., 195)
-            * `seats_available`: (e.g., 43)
-            * `via_route`: Look for "Via-". Example: "Via-HOSUR" MUST become `["HOSUR"]`. If not found, return `null`.
-            Example: "Via-KARUR , DINDIGUL" MUST become `["KARUR", "DINDIGUL"]`.
-            If not found, return `null`.
+        * `child_fare`: Strictly from DETAIL_TABLE_HTML "Child Fare" column.
+        
+        * `duration`: Extract the numeric value string. "6.10Hrs" -> "6.10". "5:30" -> "5.30".
+        
+        * `price_in_rs`: Extract integers only. Remove "Rs" or symbols.
 
-        2.  **FROM MAIN_LIST_HTML (Special Tags):**
-            * `trip_code`: Extract text inside the <a> tag (e.g., "0005SALMADMM01L"). 
-            Trip code pattern hint: look for the longest contiguous alphanumeric uppercase token of length >=8 (e.g., 0005SALMADMM01L). **Look in MAIN_LIST_HTML first, use DETAIL_TABLE_HTML as a fallback.**
-            * `route_code`: Extract the short code after the " / " separator (e.g., "104N1"). **Look in MAIN_LIST_HTML first, use DETAIL_TABLE_HTML as a fallback.**
-            * trip_code vs route_code: They are different fields. Do not confuse them. trip_code is the long one (0005SALMADMM01L), route_code is the short one (104N1).
+        ### FAILURE HANDLING
+        * If a value is missing in Primary AND Fallback sources, return "NA".
+        * Exceptions: `via_route` returns `null`, `price_in_rs` returns `0` if missing.
 
-        3.  **FROM DETAIL_TABLE_HTML (Secondary Source):**
-            * `total_kms`: Look for the label "Total Kms" and extract its value (e.g., "208.00"). The numeric value might be in the next strong tag or somewhere nearby.
-            * `child_fare`: Look for a child fare.
-
-        Failure Handling:
-        * If any value is not found in its specified location, return "NA" (or `null` for `via_route`).
-        * DO NOT GUESS.
-
-        Return:
-        -> A single JSON object that conforms exactly to the JSON_SCHEMA provided in the system prompt.
-        -> Do not include any extra text, comments, or markdown.
-        -> Output strictly raw JSON.
+        ### OUTPUT FORMAT
+        Output strictly raw JSON. No markdown, no conversational text.
         """
         
         messages = [
