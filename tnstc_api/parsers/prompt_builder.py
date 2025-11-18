@@ -1,57 +1,13 @@
 import json
-import inspect
 import textwrap
-from typing import Any, get_args, get_origin, Union, Annotated, List, Type
+from typing import List, Type
 from pydantic import BaseModel
 from utils.helpers import minify_html
-
-def _get_base_type(type_hint: Any) -> Any:
-    origin = get_origin(type_hint)
-    args = get_args(type_hint)
-    if origin is Union:
-        non_none = [a for a in args if a is not type(None)]
-        if len(non_none) == 1:
-            return _get_base_type(non_none[0])
-        return type_hint
-    if origin is Annotated:
-        return _get_base_type(args[0])
-    if origin in (list, List, tuple):
-        return _get_base_type(args[0]) if args else type_hint
-    if args:
-        return _get_base_type(args[0])
-    return type_hint
-
-def extract_examples(model: Type[BaseModel], visited: set = None) -> str:
-    if visited is None:
-        visited = set()
-    if model in visited:
-        return ""
-    visited.add(model)
-    example_str = ""
-    model_config = getattr(model, "model_config", {})
-    if isinstance(model_config, dict) and "json_schema_extra" in model_config:
-        extra = model_config["json_schema_extra"]
-        if isinstance(extra, dict) and "examples" in extra:
-            examples = extra["examples"]
-            if examples:
-                example_str += f"- **{model.__name__} Examples:**\n"
-                for i, example in enumerate(examples):
-                    example_str += f"  - **Example {i + 1}:**\n"
-                    example_str += "```json\n" + json.dumps(example, indent=2) + "\n```\n"
-    for name, field in model.model_fields.items():
-        field_type = _get_base_type(field.annotation)
-        if inspect.isclass(field_type) and issubclass(field_type, BaseModel) and field_type != model:
-            nested = extract_examples(field_type, visited)
-            if nested:
-                if example_str:
-                    example_str += "\n\n"
-                example_str += nested
-    return example_str.strip()
 
 class PromptGenerator:
     def build_system_prompt(self, pydantic_model: Type[BaseModel]) -> str:
         json_schema = pydantic_model.model_json_schema()
-        
+
         system_content = textwrap.dedent(f"""
         You are a JSON extraction engine. Output exactly one JSON object that conforms to the provided JSON Schema.
         Do not include conversational text or markdown outside the final JSON.
