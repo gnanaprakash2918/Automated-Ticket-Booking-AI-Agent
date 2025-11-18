@@ -14,8 +14,7 @@ log = logging.getLogger(__name__)
 
 class BeautifulSoupParser(AbstractBusParser):
     """
-    Implements the BusParser interface using BeautifulSoup for high-speed,
-    selector-based HTML parsing.    
+    Implements the BusParser interface using BeautifulSoup for high-speed, selector-based HTML parsing.
     """
     
     async def parse(
@@ -65,7 +64,8 @@ class BeautifulSoupParser(AbstractBusParser):
                 temp_data_list.append({
                     "bus_type": bus_type,
                     "seats_available": seats_available,
-                    "via_route_list": via_route_list
+                    "via_route_list": via_route_list,
+                    "onclick_attr": onclick_attr
                 })
                 
             except Exception as e:
@@ -89,7 +89,7 @@ class BeautifulSoupParser(AbstractBusParser):
                 
             try:
                 parsed_details = self._parse_details_from_trip_html(details_html)
-                fallback_data = self._parse_details_from_bus_div(bus_div)
+                fallback_data = self._parse_details_from_bus_div(bus_div, main_list_data.get("onclick_attr"))
 
                 # 3. Create the final service_data, starting with fallback as base
                 service_data = {
@@ -163,10 +163,14 @@ class BeautifulSoupParser(AbstractBusParser):
     def _parse_via_route(self, bus_div: Tag) -> Optional[List[str]]:
         """Extracts the 'via' route list from the bus_div."""
         via_route_list: Optional[List[str]] = None
-        via_tag_candidates = [tag for tag in bus_div.find_all('small') if tag.get('style') and 'color: blue' in tag['style']]
-        via_tag = via_tag_candidates[0] if via_tag_candidates else None
+        via_tag_candidates = [
+                tag for tag in bus_div.find_all('small')
+                if (b_tag := tag.find('b')) and "Via-" in b_tag.get_text()
+        ]
+
         
-        if via_tag and via_tag.find('b'):
+        if via_tag_candidates:
+            via_tag = via_tag_candidates[0]
             via_b_tag = via_tag.find('b')
             if via_b_tag and via_b_tag.text is not None:
                 via_text = via_b_tag.text.strip()
@@ -202,7 +206,7 @@ class BeautifulSoupParser(AbstractBusParser):
             log.error(f"Error parsing trip detail HTML: {e}")
             return None
 
-    def _parse_details_from_bus_div(self, bus_div: Tag) -> dict:
+    def _parse_details_from_bus_div(self, bus_div: Tag, onclick_attr: str = "") -> dict:
         """Fallback helper to scrape data from the main list div."""
         data = {}
         
@@ -230,23 +234,42 @@ class BeautifulSoupParser(AbstractBusParser):
         
         price = 0
         price_div = bus_div.find('div', class_ = 'price')
-        if price_div and price_div.contents:
-            full_text = " ".join(str(el) for el in price_div.contents)
-            tokens = full_text.split()
-            try:
-                amount = next(t for t in tokens if t.isdigit())
-                price = int(amount)
-            except (StopIteration, ValueError):
-                log.warning("BS_Parser: Could not find numeric price in fallback.")
+        if price_div:
+            price_text = price_div.get_text(strip=True)
+            match = re.search(r'(\d+)', price_text)
+            if match:
+                price = int(match.group(1))
+        else:
+             log.warning("BS_Parser: Could not find numeric price in fallback.")
         data['price_in_rs'] = price
         
-        code_span = next((s for s in bus_div.find_all('span', class_ = 'text-1 text-muted d-block') if s.text and '/' in s.text), None)
-        if code_span:
-            parts = code_span.text.strip().split('/', 1)
-            data['trip_code'] = parts[0].strip()
-            data['route_code'] = parts[1].strip() if len(parts) > 1 else "N/A"
-        else:
-            data['trip_code'], data['route_code'] = "N/A", "N/A"
+        js_parsed = False
+        if onclick_attr:
+            try:
+                match = re.search(r"loadTripDetails\('([^']+)'", onclick_attr)
+                if match:
+                    full_args = match.group(1)
+                    args_list = full_args.split(',')
+                    if len(args_list) >= 12:
+                        data['trip_code'] = args_list[10].strip()
+                        data['route_code'] = args_list[11].strip()
+                        js_parsed = True
+            except Exception as e:
+                log.debug(f"JS argument parsing failed: {e}")
+
+        if not js_parsed:
+            code_span = next((s for s in bus_div.find_all('span', class_ = 'text-1 text-muted d-block') if s.text and '/' in s.text), None)
+            if code_span:
+                parts = list(code_span.stripped_strings)
+                if len(parts) >= 3 and parts[1] == '/':
+                    data['trip_code'] = parts[0].strip()
+                    data['route_code'] = parts[2].strip()
+                else:
+                    raw_parts = code_span.get_text().split('/', 1)
+                    data['trip_code'] = raw_parts[0].strip()
+                    data['route_code'] = raw_parts[1].strip() if len(raw_parts) > 1 else "N/A"
+            else:
+                data['trip_code'], data['route_code'] = "N/A", "N/A"
             
         return data
 
@@ -274,9 +297,10 @@ class BeautifulSoupParser(AbstractBusParser):
             fare_label = details_soup.find('strong', string=fare_pattern) or details_soup.find('div', string=fare_pattern) # type: ignore
             if not fare_label: return None
 
-            parent_div = fare_label.find_parent('div')
-            if not parent_div: return None
-            price_cell = parent_div.find_next_sibling('td')
+            label_cell = fare_label.find_parent('td')
+            if not label_cell: return None
+
+            price_cell = label_cell.find_next_sibling('td')
             if not price_cell: return None
             
             price_span = price_cell.find('span', class_='button')
