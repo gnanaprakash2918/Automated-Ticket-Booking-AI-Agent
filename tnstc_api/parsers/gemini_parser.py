@@ -86,17 +86,16 @@ class GeminiParser(AbstractBusParser):
 
         ### SOURCE OF TRUTH HIERARCHY (CRITICAL RULES)
 
-        1. **STATIC DATA (Codes, Distance, Corp):**
-           - **Source of Truth:** DETAIL_TABLE_HTML
-           - **Fallback:** MAIN_LIST_HTML
-           - Fields: `trip_code` (Service Code), `route_code` (Route No), `total_kms`, `operator` (Corporation).
-           - *Note on Trip Code:* If the Detail Table is missing, check the MAIN_LIST <a> tag. If the text inside <a> is truncated (ends in '...'), check the `onclick` attribute arguments.
-
-        2. **DYNAMIC DATA (Price, Seats, Time, Route):**
+        1. **PRIMARY IDENTIFIERS (Codes & Dynamic Info):**
            - **Source of Truth:** MAIN_LIST_HTML
            - **Fallback:** DETAIL_TABLE_HTML
-           - Fields: `price_in_rs`, `seats_available`, `departure_time`, `arrival_time`, `duration`, `via_route`, `bus_type`.
-           - *Note on Price:* Main list price is the booking price. Detail table might show base fare. Use Main List.
+           - Fields: `trip_code` (Service Code), `route_code` (Route No), `price_in_rs`, `seats_available`, `departure_time`, `arrival_time`, `duration`, `via_route`, `bus_type`.
+           - *CRITICAL for Trip Code:* Always prefer the text inside the `<a>` tag in MAIN_LIST over the Detail Table, as the popup content can sometimes be mismatched.
+
+        2. **SECONDARY STATIC DETAILS:**
+           - **Source of Truth:** DETAIL_TABLE_HTML
+           - **Fallback:** MAIN_LIST_HTML
+           - Fields: `total_kms`, `operator` (Corporation), `child_fare`.
 
         ### FIELD SPECIFIC EXTRACTION LOGIC
 

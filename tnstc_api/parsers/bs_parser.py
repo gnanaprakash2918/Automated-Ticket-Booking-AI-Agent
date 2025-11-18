@@ -109,6 +109,11 @@ class BeautifulSoupParser(AbstractBusParser):
 
                 # 4. Selectively overwrite with data from parsed_details
                 if parsed_details:
+                    # Protect the Trip/Route code found in Main List from being overwritten by potentially stale Detail data
+                    if service_data.get('trip_code') not in [None, "N/A", ""]:
+                        parsed_details.pop('trip_code', None)
+                        parsed_details.pop('route_code', None)
+
                     service_data.update({k: v for k, v in parsed_details.items() if v})
                     
                     try:
