@@ -85,7 +85,7 @@ class BeautifulSoupParser(AbstractBusParser):
                 parsed_details = self._parse_details_from_trip_html(details_html)
                 fallback_data = self._parse_details_from_bus_div(bus_div, main_list_data.get("onclick_attr"))
 
-                # 3. Create the final service_data, starting with fallback as base (Primary Source of Truth)
+                # 3. Create the final service_data using Main List as the BASE (Primary Source of Truth)
                 service_data = {
                     'operator': fallback_data.get('operator', 'N/A'),
                     'trip_code': fallback_data.get('trip_code', 'N/A'),
@@ -101,28 +101,26 @@ class BeautifulSoupParser(AbstractBusParser):
                 total_kms = None
                 child_fare = None
 
-                # 4. Selectively overwrite with data from parsed_details
+                # 4. Selectively merge details. strictly prohibiting overwrite of valid Primary data.
                 if parsed_details:
-                    # PRIMARY SOURCE OF TRUTH ENFORCEMENT
-                    # The following fields are visible in the Main List. We must NOT overwrite them 
-                    # with data from the Detail Popup unless the Main List data is missing/invalid.
-                    # Detail Popup often has conflicting "scheduled" times vs "actual" times in Main List.
-                    sot_main_list_fields = {
+                    # CRITICAL: These fields often differ in the Popup (Scheduled vs Actual).
+                    # We MUST prefer the Main List values if they exist.
+                    primary_sot_fields = [
                         'trip_code', 'route_code', 'departure_time', 
                         'arrival_time', 'duration', 'price_in_rs'
-                    }
+                    ]
 
                     for k, v in parsed_details.items():
                         if not v: continue
                         
-                        # If it's a primary key and we already have valid data from Main List, SKIP overwrite
-                        if k in sot_main_list_fields:
+                        # If it's a Primary SOT field and we already have it from Main List, SKIP overwrite.
+                        if k in primary_sot_fields:
                             current_val = service_data.get(k)
-                            # Check validity: not None, not "N/A", not empty, and not 0 (for numeric price)
+                            # Check if current value is valid (not None, not 'N/A', not 0)
                             if current_val not in [None, "N/A", "", 0]:
                                 continue
 
-                        # Special handling for price string conversion from details (if Main List price was 0)
+                        # Special handling for price string conversion from details
                         if k == 'price_in_rs_str':
                             if service_data.get('price_in_rs', 0) == 0:
                                 try:
@@ -296,7 +294,7 @@ class BeautifulSoupParser(AbstractBusParser):
             label_cell = row.find('td', attrs={"class": "bodytextWithSecondMainColor"})
             value_cell = row.find('td', attrs={"class": "bodytextWithThirdMainColor"})
             if label_cell and value_cell:
-                # Clean key: "Total Kms * :" -> "Total Kms"
+                # Sanitize key to handle 'Total Kms *' vs 'Total Kms'
                 label = label_cell.text.replace(':', '').replace('\xa0', ' ').replace('*', '').strip()
                 value = (value_cell.find('strong') or value_cell).text.strip()
                 details_map[label] = value
