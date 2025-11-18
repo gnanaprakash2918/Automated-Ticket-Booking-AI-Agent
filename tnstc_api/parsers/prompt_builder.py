@@ -17,36 +17,22 @@ class PromptGenerator:
         """).strip()
         return system_content
 
-    def build_cot_user_prompt(self, main_html: str, detail_html: str) -> str:
-
-        few_shot_examples = self._build_few_shot_examples()
-        new_data_section = textwrap.dedent(f"""
-        ---
-        NEW DATA TO PROCESS
-        ---
-        MAIN_LIST_HTML
-        {minify_html(main_html)}
-        ---
-        DETAIL_TABLE_HTML
-        {minify_html(detail_html)}
-        ---
-        FINAL JSON OUTPUT
-        """)
-        return few_shot_examples + "\n" + new_data_section
-
     def _build_few_shot_examples(self) -> str:
         examples = self._get_raw_examples()
         parts = ["\n## Few-Shot Examples\n"]
         for idx, example in enumerate(examples, 1):
+            main_clean = minify_html(example["main_html"])
+            detail_clean = minify_html(example["detail_html"])
+            
             parts.append(textwrap.dedent(f"""
             ---
             EXAMPLE {idx}
             ---
             MAIN_LIST_HTML
-            {minify_html(example["main_html"])}
+            {main_clean}
             ---
             DETAIL_TABLE_HTML
-            {minify_html(example["detail_html"])}
+            {detail_clean}
             ---
             CORRECT RATIONALE AND JSON OUTPUT
             {json.dumps(example["json_output"], indent=2)}

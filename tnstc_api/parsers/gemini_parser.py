@@ -1,3 +1,4 @@
+import re
 import httpx
 from typing import List, Optional
 import logging
@@ -36,7 +37,8 @@ class GeminiParser(AbstractBusParser):
             self.llm = ChatGoogleGenerativeAI(
                 model=GEMINI_MODEL, 
                 api_key=GEMINI_API_KEY,
-                request_timeout=GEMINI_LOAD_TIMEOUT
+                request_timeout=GEMINI_LOAD_TIMEOUT,
+                temperature=0.0
             )
 
             self.prompt_gen = PromptGenerator()
@@ -66,8 +68,10 @@ class GeminiParser(AbstractBusParser):
         """
 
         user_prompt = f"""
-        You are an expert parsing engine. You will receive two HTML fragments: a "Main List" item and a "Detail Table" popup.
-        
+        You are an expert parsing engine. You will receive two CLEANED HTML fragments: 
+        1. MAIN_LIST_HTML (Primary data)
+        2. DETAIL_TABLE_HTML (Secondary data)
+
         TASK:
         Extract specific fields defined in the JSON_SCHEMA.
         Merge data from both sources based on the "Source of Truth" hierarchy below.
@@ -81,7 +85,7 @@ class GeminiParser(AbstractBusParser):
         {main_list_html}
         ---
         DETAIL_TABLE_HTML
-        {minify_html(detail_table_html)}
+        {detail_table_html}
         ---
 
         ### SOURCE OF TRUTH HIERARCHY (CRITICAL RULES)
@@ -135,7 +139,7 @@ class GeminiParser(AbstractBusParser):
                 self.total_chars_sent += message_size
                 self.total_requests += 1
 
-                log.info(f"LLM_Parser Bus {bus_index} (Attempt {attempt.retry_state.attempt_number}): Sending HTML (Main: {len(main_list_html)} chars, Detail: {len(detail_table_html)} chars) to LLM for structured extraction. Chars sent: {message_size}.") 
+                log.info(f"LLM_Parser Bus {bus_index} (Attempt {attempt.retry_state.attempt_number}): Sending Cleaned HTML ({message_size} chars) to LLM.") 
                 
                 try:
                     service_with_reasoning = await self.structured_llm.ainvoke(messages)
@@ -152,7 +156,7 @@ class GeminiParser(AbstractBusParser):
                         raise TypeError("LLM returned wrong type")
                 
                 except ValidationError as e:
-                    log.error(f"LLM_Parser Bus {bus_index}: Pydantic validation failed. Input: '{user_prompt[:50]}...'. Error: {e}", exc_info=True)
+                    log.error(f"LLM_Parser Bus {bus_index}: Pydantic validation failed. Error: {e}", exc_info=True)
                     raise
                 except Exception as e:
                     log.error(f"GeminiParser: Bus {bus_index}: Failed during LangChain invocation: {e}")
@@ -200,6 +204,9 @@ class GeminiParser(AbstractBusParser):
         # 2. Create tasks to parse each bus using the two HTML sources
         parsing_tasks = []
         for idx, bus_div in enumerate(bus_divs):
+            main_list_html = re.sub(r"[\r\n]+", "", str(bus_div))
+            detail_table_html = re.sub(r"[\r\n]+", "", str(all_details_html[idx]))
+            
             main_list_html = minify_html(str(bus_div))
             detail_table_html = minify_html(all_details_html[idx])
             

@@ -1,3 +1,4 @@
+import re
 import httpx
 from typing import List, Optional
 from bs4 import BeautifulSoup
@@ -6,7 +7,6 @@ from pydantic import ValidationError
 from ..schemas import BusService
 import asyncio
 import logging
-import re
 from ..config import OLLAMA_MODEL, OLLAMA_CONCURRENCY_LIMIT, OLLAMA_BASE_URL
 from tenacity import wait_exponential, stop_after_attempt, Retrying
 
@@ -65,7 +65,9 @@ class OllamaParser(AbstractBusParser):
         """
 
         user_prompt = f"""
-        You are an expert parsing engine. You will receive two HTML fragments: a "Main List" item and a "Detail Table" popup.
+        You are an expert parsing engine. You will receive two CLEANED HTML fragments: 
+        1. MAIN_LIST_HTML (Primary data)
+        2. DETAIL_TABLE_HTML (Secondary data)
         
         TASK:
         Extract specific fields defined in the JSON_SCHEMA.
@@ -80,7 +82,7 @@ class OllamaParser(AbstractBusParser):
         {main_list_html}
         ---
         DETAIL_TABLE_HTML
-        {minify_html(detail_table_html)}
+        {detail_table_html}
         ---
 
         ### SOURCE OF TRUTH HIERARCHY (CRITICAL RULES)
@@ -247,9 +249,10 @@ class OllamaParser(AbstractBusParser):
         for idx, bus_div in enumerate(bus_divs):
             main_list_html = re.sub(r"[\r\n]+", "", str(bus_div))
             detail_table_html = re.sub(r"[\r\n]+", "", str(all_details_html[idx]))
+            
+            main_list_html = minify_html(str(bus_div))
+            detail_table_html = minify_html(all_details_html[idx])
 
-            main_list_html = minify_html(main_list_html)
-            detail_table_html = minify_html(detail_table_html)
             tasks.append(
                 self._wrapper_parse_chunk(
                     semaphore, 
