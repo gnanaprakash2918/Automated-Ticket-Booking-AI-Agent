@@ -51,7 +51,7 @@ def extract_examples(model: Type[BaseModel], visited: set = None) -> str:
 class PromptGenerator:
     def build_system_prompt(self, pydantic_model: Type[BaseModel]) -> str:
         json_schema = pydantic_model.model_json_schema()
-        # examples_hint = extract_examples(pydantic_model)
+        
         system_content = textwrap.dedent(f"""
         You are a JSON extraction engine. Output exactly one JSON object that conforms to the provided JSON Schema.
         Do not include conversational text or markdown outside the final JSON.
