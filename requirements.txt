@@ -13,3 +13,5 @@ tenacity
 langchain-community
 langchain-google-genai
 langchain-ollama
+loguru
+aiosqlite
