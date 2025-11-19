@@ -11,27 +11,27 @@ from .base import AbstractBusParser
 setup_logging()
 log = logging.getLogger(__name__)
 
+
 class BeautifulSoupParser(AbstractBusParser):
     """
     Implements the BusParser interface using BeautifulSoup for high-speed, selector-based HTML parsing.
     """
-    
+
     async def parse(
-        self, 
-        client: httpx.AsyncClient, 
-        html_content: str,
-        limit: Optional[int] = None
+        self, client: httpx.AsyncClient, html_content: str, limit: Optional[int] = None
     ) -> List[TNSTCBusService]:
         """
         Parses the raw HTML search results into a structured list of TNSTCBusService models.
         """
-        soup = BeautifulSoup(html_content, 'lxml')
+        soup = BeautifulSoup(html_content, "lxml")
         bus_services: List[TNSTCBusService] = []
-            
+
         temp_data_list = []
-        bus_divs = soup.find_all('div', class_ = 'bus-list')
-        
-        log.info(f"BeautifulSoupParser: Starting hybrid parse. Found {len(bus_divs)} bus elements.")
+        bus_divs = soup.find_all("div", class_="bus-list")
+
+        log.info(
+            f"BeautifulSoupParser: Starting hybrid parse. Found {len(bus_divs)} bus elements."
+        )
 
         if limit is not None:
             log.info(f"BeautifulSoupParser: Applying limit of {limit} buses.")
@@ -41,36 +41,46 @@ class BeautifulSoupParser(AbstractBusParser):
         for idx, bus_div in enumerate(bus_divs):
             try:
                 # 1. Get data ONLY available in the main list 'bus_div'
-                bus_type = str(bus_div.get('data-bus-type', 'N/A')).strip()
+                bus_type = str(bus_div.get("data-bus-type", "N/A")).strip()
                 seats_available = self._parse_seats(bus_div)
                 via_route_list = self._parse_via_route(bus_div)
-                
+
                 # 1.4 Onclick attribute - Load Trip Details
-                a_tag = bus_div.find("a", attrs={"data-target": "#TripcodePopUp", "onclick": True})
+                a_tag = bus_div.find(
+                    "a", attrs={"data-target": "#TripcodePopUp", "onclick": True}
+                )
                 onclick_attr = a_tag.get("onclick", "") if a_tag else ""
-                    
-                temp_data_list.append({
-                    "bus_type": bus_type,
-                    "seats_available": seats_available,
-                    "via_route_list": via_route_list,
-                    "onclick_attr": onclick_attr
-                })
-                
+
+                temp_data_list.append(
+                    {
+                        "bus_type": bus_type,
+                        "seats_available": seats_available,
+                        "via_route_list": via_route_list,
+                        "onclick_attr": onclick_attr,
+                    }
+                )
+
             except Exception as e:
                 log.error(f"Critical error in bs_parser (Pass 1) for bus {idx}: {e}")
                 temp_data_list.append(None)
 
         # 3. Fetch detailed HTML SEQUENTIALLY to avoid server state race conditions
         all_details_html = []
-        log.info(f"BeautifulSoupParser: Starting sequential detail fetch for {len(temp_data_list)} buses...")
-        
+        log.info(
+            f"BeautifulSoupParser: Starting sequential detail fetch for {len(temp_data_list)} buses..."
+        )
+
         for idx, data_item in enumerate(temp_data_list):
             if data_item and data_item.get("onclick_attr"):
-                detail_html = await self._call_load_trip_details(client, str(data_item["onclick_attr"]), idx)
+                detail_html = await self._call_load_trip_details(
+                    client, str(data_item["onclick_attr"]), idx
+                )
                 all_details_html.append(detail_html)
             else:
-                if data_item: 
-                    log.warning(f"BS_Parser Bus {idx}: No 'onclick' attribute found. Cannot fetch details.")
+                if data_item:
+                    log.warning(
+                        f"BS_Parser Bus {idx}: No 'onclick' attribute found. Cannot fetch details."
+                    )
                 all_details_html.append("")
 
         # 4. Combine main list data with detail data using the new hybrid logic
@@ -80,23 +90,27 @@ class BeautifulSoupParser(AbstractBusParser):
 
             if main_list_data is None:
                 continue
-                
+
             try:
                 parsed_details = self._parse_details_from_trip_html(details_html)
-                fallback_data = self._parse_details_from_bus_div(bus_div, main_list_data.get("onclick_attr"))
+                fallback_data = self._parse_details_from_bus_div(
+                    bus_div, main_list_data.get("onclick_attr")
+                )
 
                 # 3. Create the final service_data using Main List as the BASE (Primary Source of Truth)
                 service_data = {
-                    'operator': fallback_data.get('operator', 'N/A'),
-                    'trip_code': fallback_data.get('trip_code', 'N/A'),
-                    'route_code': fallback_data.get('route_code', 'N/A'),
-                    'departure_time': fallback_data.get('departure_time', 'N/A'),
-                    'arrival_time': fallback_data.get('arrival_time', 'N/A'),
-                    'duration': fallback_data.get('duration', 'N/A'),
-                    'price_in_rs': fallback_data.get('price_in_rs', 0)
+                    "operator": fallback_data.get("operator", "N/A"),
+                    "trip_code": fallback_data.get("trip_code", "N/A"),
+                    "route_code": fallback_data.get("route_code", "N/A"),
+                    "departure_time": fallback_data.get("departure_time", "N/A"),
+                    "arrival_time": fallback_data.get("arrival_time", "N/A"),
+                    "duration": fallback_data.get("duration", "N/A"),
+                    "price_in_rs": fallback_data.get("price_in_rs", 0),
                 }
-                
-                log.debug(f"BS_Parser Bus {idx}: Fallback Price: {fallback_data.get('price_in_rs')}, Trip Code: {fallback_data.get('trip_code')}")
+
+                log.debug(
+                    f"BS_Parser Bus {idx}: Fallback Price: {fallback_data.get('price_in_rs')}, Trip Code: {fallback_data.get('trip_code')}"
+                )
 
                 total_kms = None
                 child_fare = None
@@ -106,13 +120,18 @@ class BeautifulSoupParser(AbstractBusParser):
                     # CRITICAL: These fields often differ in the Popup (Scheduled vs Actual).
                     # We MUST prefer the Main List values if they exist.
                     primary_sot_fields = [
-                        'trip_code', 'route_code', 'departure_time', 
-                        'arrival_time', 'duration', 'price_in_rs'
+                        "trip_code",
+                        "route_code",
+                        "departure_time",
+                        "arrival_time",
+                        "duration",
+                        "price_in_rs",
                     ]
 
                     for k, v in parsed_details.items():
-                        if not v: continue
-                        
+                        if not v:
+                            continue
+
                         # If it's a Primary SOT field and we already have it from Main List, SKIP overwrite.
                         if k in primary_sot_fields:
                             current_val = service_data.get(k)
@@ -121,10 +140,10 @@ class BeautifulSoupParser(AbstractBusParser):
                                 continue
 
                         # Special handling for price string conversion from details
-                        if k == 'price_in_rs_str':
-                            if service_data.get('price_in_rs', 0) == 0:
+                        if k == "price_in_rs_str":
+                            if service_data.get("price_in_rs", 0) == 0:
                                 try:
-                                    service_data['price_in_rs'] = int(v)
+                                    service_data["price_in_rs"] = int(v)
                                 except (ValueError, TypeError):
                                     pass
                             continue
@@ -132,26 +151,30 @@ class BeautifulSoupParser(AbstractBusParser):
                         # Safe to update secondary fields (operator, total_kms, child_fare, etc.)
                         service_data[k] = v
 
-                    total_kms = parsed_details.get('total_kms')
-                    child_fare = parsed_details.get('child_fare', "NA")
-                
-                log.info(f"BS_Parser Bus {idx} MERGED: Operator: {service_data['operator']}, Trip Code: {service_data['trip_code']}, Final Price: {service_data['price_in_rs']}")
+                    total_kms = parsed_details.get("total_kms")
+                    child_fare = parsed_details.get("child_fare", "NA")
+
+                log.info(
+                    f"BS_Parser Bus {idx} MERGED: Operator: {service_data['operator']}, Trip Code: {service_data['trip_code']}, Final Price: {service_data['price_in_rs']}"
+                )
 
                 # 5. Append the final merged object
-                bus_services.append(TNSTCBusService(
-                    operator=service_data['operator'],
-                    bus_type=main_list_data['bus_type'],
-                    trip_code=service_data['trip_code'],
-                    route_code=service_data['route_code'],
-                    departure_time=service_data['departure_time'],
-                    arrival_time=service_data['arrival_time'],
-                    duration=service_data['duration'],
-                    price_in_rs=service_data['price_in_rs'],
-                    seats_available=main_list_data['seats_available'],
-                    via_route=main_list_data['via_route_list'],
-                    total_kms=total_kms,
-                    child_fare=child_fare
-                ))
+                bus_services.append(
+                    TNSTCBusService(
+                        operator=service_data["operator"],
+                        bus_type=main_list_data["bus_type"],
+                        trip_code=service_data["trip_code"],
+                        route_code=service_data["route_code"],
+                        departure_time=service_data["departure_time"],
+                        arrival_time=service_data["arrival_time"],
+                        duration=service_data["duration"],
+                        price_in_rs=service_data["price_in_rs"],
+                        seats_available=main_list_data["seats_available"],
+                        via_route=main_list_data["via_route_list"],
+                        total_kms=total_kms,
+                        child_fare=child_fare,
+                    )
+                )
 
             except Exception as e:
                 log.error(f"Critical error in bs_parser (Pass 2) for bus {idx}: {e}")
@@ -164,34 +187,45 @@ class BeautifulSoupParser(AbstractBusParser):
     def _parse_seats(self, bus_div: Tag) -> int:
         """Extracts available seats from the bus_div."""
         seats_available = 0
-        seats_text_element_candidates = bus_div.find_all('span', class_ = 'text-1')
-        seats_text_element = next((s for s in seats_text_element_candidates if isinstance(s.string, str) and 'Seats Available' in s.string), None)
-        
+        seats_text_element_candidates = bus_div.find_all("span", class_="text-1")
+        seats_text_element = next(
+            (
+                s
+                for s in seats_text_element_candidates
+                if isinstance(s.string, str) and "Seats Available" in s.string
+            ),
+            None,
+        )
+
         if seats_text_element and seats_text_element.text is not None:
             try:
-                seats_available = int(seats_text_element.text.split(' ')[0])
+                seats_available = int(seats_text_element.text.split(" ")[0])
             except ValueError:
-                log.warning('Could not convert the number of seats to an integer.')
+                log.warning("Could not convert the number of seats to an integer.")
         return seats_available
 
     def _parse_via_route(self, bus_div: Tag) -> Optional[List[str]]:
         """Extracts the 'via' route list from the bus_div."""
         via_route_list: Optional[List[str]] = None
         via_tag_candidates = [
-                tag for tag in bus_div.find_all('small')
-                if (b_tag := tag.find('b')) and "Via-" in b_tag.get_text()
+            tag
+            for tag in bus_div.find_all("small")
+            if (b_tag := tag.find("b")) and "Via-" in b_tag.get_text()
         ]
 
-        
         if via_tag_candidates:
             via_tag = via_tag_candidates[0]
-            via_b_tag = via_tag.find('b')
+            via_b_tag = via_tag.find("b")
             if via_b_tag and via_b_tag.text is not None:
                 via_text = via_b_tag.text.strip()
-                if 'Via-' in via_text:
-                    route_string = via_text.replace('Via-', '').strip()
-                    if route_string: 
-                        via_route_list = [stop.strip() for stop in route_string.split(',') if stop.strip()]
+                if "Via-" in via_text:
+                    route_string = via_text.replace("Via-", "").strip()
+                    if route_string:
+                        via_route_list = [
+                            stop.strip()
+                            for stop in route_string.split(",")
+                            if stop.strip()
+                        ]
                         log.debug(f"BS_Parser: Extracted via route: {via_route_list}")
         return via_route_list
 
@@ -200,21 +234,21 @@ class BeautifulSoupParser(AbstractBusParser):
         if not trip_html:
             return None
         try:
-            details_soup = BeautifulSoup(trip_html, 'lxml')
+            details_soup = BeautifulSoup(trip_html, "lxml")
             data: Dict[str, Any] = {}
-            
-            rows = details_soup.find_all('tr')
+
+            rows = details_soup.find_all("tr")
             details_map = self._parse_key_value_table(rows)
-            
-            data['operator'] = details_map.get("Corporation")
-            data['trip_code'] = details_map.get("Service Code")
-            data['route_code'] = details_map.get("Route No.")
-            data['total_kms'] = details_map.get("Total Kms")
-            data['duration'] = details_map.get("Journey Hours")
-            
+
+            data["operator"] = details_map.get("Corporation")
+            data["trip_code"] = details_map.get("Service Code")
+            data["route_code"] = details_map.get("Route No.")
+            data["total_kms"] = details_map.get("Total Kms")
+            data["duration"] = details_map.get("Journey Hours")
+
             self._parse_fares(details_soup, data)
             self._parse_stops_table(details_soup, data)
-            
+
             return data
         except Exception as e:
             log.error(f"Error parsing trip detail HTML: {e}")
@@ -223,120 +257,155 @@ class BeautifulSoupParser(AbstractBusParser):
     def _parse_details_from_bus_div(self, bus_div: Tag, onclick_attr: str = "") -> dict:
         """Fallback helper to scrape data from the main list div."""
         data = {}
-        
-        op_el = bus_div.find('span', class_ = 'operator-name')
-        data['operator'] = op_el.text.strip() if op_el else "N/A"
-        
-        time_divs = bus_div.find_all('div', class_='time-info')
+
+        op_el = bus_div.find("span", class_="operator-name")
+        data["operator"] = op_el.text.strip() if op_el else "N/A"
+
+        time_divs = bus_div.find_all("div", class_="time-info")
 
         # Departure time
         if len(time_divs) > 0:
-            span = time_divs[0].find('span')
-            data['departure_time'] = span.get_text(strip=True) if span else "N/A"
+            span = time_divs[0].find("span")
+            data["departure_time"] = span.get_text(strip=True) if span else "N/A"
         else:
-            data['departure_time'] = "N/A"
+            data["departure_time"] = "N/A"
 
         # Arrival time
         if len(time_divs) > 2:
-            span = time_divs[2].find('span')
-            data['arrival_time'] = span.get_text(strip=True) if span else "N/A"
+            span = time_divs[2].find("span")
+            data["arrival_time"] = span.get_text(strip=True) if span else "N/A"
         else:
-            data['arrival_time'] = "N/A"
+            data["arrival_time"] = "N/A"
 
-        dur_el = bus_div.find('span', class_='duration')
-        data['duration'] = dur_el.text.strip().replace('Hrs', '').strip() if dur_el and dur_el.text else "N/A"
-        
+        dur_el = bus_div.find("span", class_="duration")
+        data["duration"] = (
+            dur_el.text.strip().replace("Hrs", "").strip()
+            if dur_el and dur_el.text
+            else "N/A"
+        )
+
         price = 0
-        price_div = bus_div.find('div', class_ = 'price')
+        price_div = bus_div.find("div", class_="price")
         if price_div:
             price_text = price_div.get_text(strip=True)
-            match = re.search(r'(\d+)', price_text)
+            match = re.search(r"(\d+)", price_text)
             if match:
                 price = int(match.group(1))
         else:
-             log.warning("BS_Parser: Could not find numeric price in fallback.")
-        data['price_in_rs'] = price
-        
+            log.warning("BS_Parser: Could not find numeric price in fallback.")
+        data["price_in_rs"] = price
+
         js_parsed = False
         if onclick_attr:
             try:
                 match = re.search(r"loadTripDetails\('([^']+)'", onclick_attr)
                 if match:
                     full_args = match.group(1)
-                    args_list = full_args.split(',')
+                    args_list = full_args.split(",")
                     if len(args_list) >= 12:
-                        data['trip_code'] = args_list[10].strip()
-                        data['route_code'] = args_list[11].strip()
+                        data["trip_code"] = args_list[10].strip()
+                        data["route_code"] = args_list[11].strip()
                         js_parsed = True
             except Exception as e:
                 log.debug(f"JS argument parsing failed: {e}")
 
         if not js_parsed:
-            code_span = next((s for s in bus_div.find_all('span', class_ = 'text-1 text-muted d-block') if s.text and '/' in s.text), None)
+            code_span = next(
+                (
+                    s
+                    for s in bus_div.find_all(
+                        "span", class_="text-1 text-muted d-block"
+                    )
+                    if s.text and "/" in s.text
+                ),
+                None,
+            )
             if code_span:
                 parts = list(code_span.stripped_strings)
-                if len(parts) >= 3 and parts[1] == '/':
-                    data['trip_code'] = parts[0].strip()
-                    data['route_code'] = parts[2].strip()
+                if len(parts) >= 3 and parts[1] == "/":
+                    data["trip_code"] = parts[0].strip()
+                    data["route_code"] = parts[2].strip()
                 else:
-                    raw_parts = code_span.get_text().split('/', 1)
-                    data['trip_code'] = raw_parts[0].strip()
-                    data['route_code'] = raw_parts[1].strip() if len(raw_parts) > 1 else "N/A"
+                    raw_parts = code_span.get_text().split("/", 1)
+                    data["trip_code"] = raw_parts[0].strip()
+                    data["route_code"] = (
+                        raw_parts[1].strip() if len(raw_parts) > 1 else "N/A"
+                    )
             else:
-                data['trip_code'], data['route_code'] = "N/A", "N/A"
-            
+                data["trip_code"], data["route_code"] = "N/A", "N/A"
+
         return data
 
     def _parse_key_value_table(self, rows: list) -> Dict[str, str]:
         """Parses <tr> elements into a key-value map."""
         details_map = {}
         for row in rows:
-            label_cell = row.find('td', attrs={"class": "bodytextWithSecondMainColor"})
-            value_cell = row.find('td', attrs={"class": "bodytextWithThirdMainColor"})
+            label_cell = row.find("td", attrs={"class": "bodytextWithSecondMainColor"})
+            value_cell = row.find("td", attrs={"class": "bodytextWithThirdMainColor"})
             if label_cell and value_cell:
                 # Sanitize key to handle 'Total Kms *' vs 'Total Kms'
-                label = label_cell.text.replace(':', '').replace('\xa0', ' ').replace('*', '').strip()
-                value = (value_cell.find('strong') or value_cell).text.strip()
+                label = (
+                    label_cell.text.replace(":", "")
+                    .replace("\xa0", " ")
+                    .replace("*", "")
+                    .strip()
+                )
+                value = (value_cell.find("strong") or value_cell).text.strip()
                 details_map[label] = value
         return details_map
 
     def _parse_fares(self, details_soup: BeautifulSoup, data: Dict[str, Any]) -> None:
         """Finds the Adult and Child fares."""
-        data['price_in_rs_str'] = self._find_fare_value(details_soup, r"Adult\s*Fare")
-        data['child_fare'] = self._find_fare_value(details_soup, r"Child\s*Fare")
+        data["price_in_rs_str"] = self._find_fare_value(details_soup, r"Adult\s*Fare")
+        data["child_fare"] = self._find_fare_value(details_soup, r"Child\s*Fare")
 
-    def _find_fare_value(self, details_soup: BeautifulSoup, pattern_str: str) -> Optional[str]:
+    def _find_fare_value(
+        self, details_soup: BeautifulSoup, pattern_str: str
+    ) -> Optional[str]:
         """Nested helper to find a specific fare by its label pattern."""
         try:
             fare_pattern = re.compile(pattern_str, re.IGNORECASE)
-            fare_label = details_soup.find('strong', string=fare_pattern) or details_soup.find('div', string=fare_pattern) # type: ignore
-            if not fare_label: return None
+            fare_label = details_soup.find(
+                "strong", string=fare_pattern
+            ) or details_soup.find("div", string=fare_pattern)  # type: ignore
+            if not fare_label:
+                return None
 
-            label_cell = fare_label.find_parent('td')
-            if not label_cell: return None
+            label_cell = fare_label.find_parent("td")
+            if not label_cell:
+                return None
 
-            price_cell = label_cell.find_next_sibling('td')
-            if not price_cell: return None
-            
-            price_span = price_cell.find('span', class_='button')
+            price_cell = label_cell.find_next_sibling("td")
+            if not price_cell:
+                return None
+
+            price_span = price_cell.find("span", class_="button")
             if price_span:
                 return price_span.text.strip()
         except AttributeError:
             log.warning(f"AttributeError while parsing fare: {pattern_str}")
         return None
 
-    def _parse_stops_table(self, details_soup: BeautifulSoup, data: Dict[str, Any]) -> None:
+    def _parse_stops_table(
+        self, details_soup: BeautifulSoup, data: Dict[str, Any]
+    ) -> None:
         """Parses departure and arrival times from the stops table."""
-        list_heading_tr = details_soup.find('tr', class_='listHeading')
-        if not list_heading_tr: return
+        list_heading_tr = details_soup.find("tr", class_="listHeading")
+        if not list_heading_tr:
+            return
 
-        valid_rows = [r for r in list_heading_tr.find_next_siblings('tr') if r.find('td')]
-        if not valid_rows: return
+        valid_rows = [
+            r for r in list_heading_tr.find_next_siblings("tr") if r.find("td")
+        ]
+        if not valid_rows:
+            return
 
         try:
-            dep_cells = valid_rows[0].find_all('td')
-            if len(dep_cells) >= 4: data['departure_time'] = dep_cells[3].text.strip()
-            arr_cells = valid_rows[-1].find_all('td')
-            if len(arr_cells) >= 4: data['arrival_time'] = arr_cells[3].text.strip()
+            dep_cells = valid_rows[0].find_all("td")
+            if len(dep_cells) >= 4:
+                data["departure_time"] = dep_cells[3].text.strip()
+            arr_cells = valid_rows[-1].find_all("td")
+            if len(arr_cells) >= 4:
+                data["arrival_time"] = arr_cells[3].text.strip()
         except IndexError:
             log.warning("IndexError while parsing stops table rows.")

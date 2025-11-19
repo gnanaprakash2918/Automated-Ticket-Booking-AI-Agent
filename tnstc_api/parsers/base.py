@@ -11,13 +11,16 @@ from ..schemas import BusService
 setup_logging()
 log = logging.getLogger(__name__)
 
+
 class AbstractBusParser(ABC):
     """
     Defines the standard interface and implements shared utilities for a bus results parser.
     All concrete parser classes must inherit from this class and implement the 'parse' method.
     """
 
-    async def _call_load_trip_details(self, client: httpx.AsyncClient, onclick_attr: str, bus_index: int) -> str:
+    async def _call_load_trip_details(
+        self, client: httpx.AsyncClient, onclick_attr: str, bus_index: int
+    ) -> str:
         """
         Extracts arguments and calls the LoadTripDetails endpoint (Shared Logic).
 
@@ -29,8 +32,12 @@ class AbstractBusParser(ABC):
             return ""
 
         data = {
-            "ServiceID": args[0], "TripCode": args[1], "StartPlaceID": args[2],
-            "EndPlaceID": args[3], "JourneyDate": args[4], "ClassID": args[5],
+            "ServiceID": args[0],
+            "TripCode": args[1],
+            "StartPlaceID": args[2],
+            "EndPlaceID": args[3],
+            "JourneyDate": args[4],
+            "ClassID": args[5],
         }
 
         try:
@@ -43,10 +50,7 @@ class AbstractBusParser(ABC):
 
     @abstractmethod
     async def parse(
-        self, 
-        client: httpx.AsyncClient, 
-        html_content: str,
-        limit: Optional[int] = None
+        self, client: httpx.AsyncClient, html_content: str, limit: Optional[int] = None
     ) -> List[BusService]:
         """
         Parses the raw HTML of the bus search results page.

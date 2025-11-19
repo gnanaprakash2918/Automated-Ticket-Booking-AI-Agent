@@ -19,6 +19,7 @@ from .prompt_builder import PromptGenerator
 setup_logging()
 log = logging.getLogger(__name__)
 
+
 class OllamaParser(AbstractBusParser):
     """
     Implements the BusParser interface using a local LLM (via the native 'ollama' client)
@@ -26,23 +27,24 @@ class OllamaParser(AbstractBusParser):
     """
 
     def __init__(self):
-        
         try:
             self.client = ollama.AsyncClient(host=OLLAMA_BASE_URL)
             self.model = OLLAMA_MODEL
             self.prompt_gen = PromptGenerator()
-            
+
             self.json_schema = BusService.model_json_schema()
 
             self.system_prompt = self.prompt_gen.build_system_prompt(BusService)
-            
+
             self.few_shot_examples = self.prompt_gen._build_few_shot_examples()
 
             self.total_chars_sent = 0
             self.total_requests = 0
 
-            log.info(f"OllamaParser initialized with native client. Model: {self.model}. Base URL: {OLLAMA_BASE_URL}")
-            
+            log.info(
+                f"OllamaParser initialized with native client. Model: {self.model}. Base URL: {OLLAMA_BASE_URL}"
+            )
+
         except ImportError:
             log.error("Ollama library not found. Please install 'ollama'")
             raise
@@ -51,10 +53,7 @@ class OllamaParser(AbstractBusParser):
             raise
 
     async def _parse_chunk_with_ollama(
-        self,
-        main_list_html: str,
-        detail_table_html: str,
-        bus_index: int
+        self, main_list_html: str, detail_table_html: str, bus_index: int
     ) -> Optional[BusService]:
         """
         Sends a single HTML chunk to the Ollama API for parsing and validation
@@ -115,26 +114,27 @@ class OllamaParser(AbstractBusParser):
         ### OUTPUT FORMAT
         Output strictly raw JSON. No markdown, no conversational text.
         """
-        
+
         messages = [
-            {'role': 'system', 'content': self.system_prompt},
-            {'role': 'user', 'content': user_prompt}
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": user_prompt},
         ]
 
         message_size = calculate_message_size(messages)
         system_size = len(self.system_prompt)
         user_size = len(user_prompt)
-        
+
         retry_config = Retrying(
             wait=wait_exponential(multiplier=1, min=2, max=30),
             stop=stop_after_attempt(3),
-            reraise=True
+            reraise=True,
         )
 
-        json_content = "" 
+        json_content = ""
         for attempt in retry_config:
             with attempt:
-                log.info( f"LLM_Parser Bus {bus_index} (Attempt {attempt.retry_state.attempt_number}): "
+                log.info(
+                    f"LLM_Parser Bus {bus_index} (Attempt {attempt.retry_state.attempt_number}): "
                     f"Sending {message_size} total chars to Ollama. "
                     f"Breakdown: System={system_size}, User={user_size}, "
                     f"HTML Input (Main={len(main_list_html)}, Detail={len(detail_table_html)}) "
@@ -147,128 +147,145 @@ class OllamaParser(AbstractBusParser):
                 try:
                     response = await self.client.chat(
                         model=self.model,
-                        messages=messages,                        
-                        format='json',
-                        options={
-                            'temperature': 0.0
-                        }
+                        messages=messages,
+                        format="json",
+                        options={"temperature": 0.0},
                     )
 
-                    json_content = response['message']['content']
-                    
+                    json_content = response["message"]["content"]
+
                     service = BusService.model_validate_json(json_content)
 
-                    log.info( f"LLM_Parser Bus {bus_index} SUCCESS: Extracted '{service.operator}' "
+                    log.info(
+                        f"LLM_Parser Bus {bus_index} SUCCESS: Extracted '{service.operator}' "
                         f"(Price: {service.price_in_rs}, Trip: {service.trip_code}). "
                         f"Cumulative: {self.total_requests} requests, {self.total_chars_sent} chars sent."
                     )
 
                     return service
-                
+
                 except json.JSONDecodeError as e:
-                    log.error(f"LLM_Parser Bus {bus_index}: Failed to decode JSON from LLM. Content: '{json_content[:150]}...'. Error: {e}", exc_info=True)
+                    log.error(
+                        f"LLM_Parser Bus {bus_index}: Failed to decode JSON from LLM. Content: '{json_content[:150]}...'. Error: {e}",
+                        exc_info=True,
+                    )
                     raise
                 except ValidationError as e:
-                    log.error(f"LLM_Parser Bus {bus_index}: Pydantic validation failed. Input: '{json_content[:150]}...'. Error: {e}", exc_info=True) 
+                    log.error(
+                        f"LLM_Parser Bus {bus_index}: Pydantic validation failed. Input: '{json_content[:150]}...'. Error: {e}",
+                        exc_info=True,
+                    )
                     raise
                 except Exception as e:
-                    log.error(f"OLLAMA_LOAD_TIMEOUT may be too low. Error during Ollama chat invocation: {e}", exc_info=True)
+                    log.error(
+                        f"OLLAMA_LOAD_TIMEOUT may be too low. Error during Ollama chat invocation: {e}",
+                        exc_info=True,
+                    )
                     raise
 
-
     async def _wrapper_parse_chunk(
-            self, 
-            semaphore: asyncio.Semaphore, 
-            main_list_html: str, 
-            detail_table_html: str,
-            idx: int
-        ) -> Optional[BusService]:
-            """
-            A wrapper that acquires the semaphore before calling the
-            parsing function.
-            """
-            log.debug(f"OllamaParser: [SEMAPHORE WAITING] for bus {idx}...")
-            async with semaphore:
-                log.info(f"OllamaParser: [SEMAPHORE ACQUIRED] Bus {idx}. Remaining slots: {semaphore._value}")
-                try:
-                    return await self._parse_chunk_with_ollama(
-                        main_list_html, 
-                        detail_table_html, 
-                        idx
-                    )
-                finally:
-                    log.debug(f"OllamaParser: [SEMAPHORE RELEASED] Finished chunk {idx}.")
+        self,
+        semaphore: asyncio.Semaphore,
+        main_list_html: str,
+        detail_table_html: str,
+        idx: int,
+    ) -> Optional[BusService]:
+        """
+        A wrapper that acquires the semaphore before calling the
+        parsing function.
+        """
+        log.debug(f"OllamaParser: [SEMAPHORE WAITING] for bus {idx}...")
+        async with semaphore:
+            log.info(
+                f"OllamaParser: [SEMAPHORE ACQUIRED] Bus {idx}. Remaining slots: {semaphore._value}"
+            )
+            try:
+                return await self._parse_chunk_with_ollama(
+                    main_list_html, detail_table_html, idx
+                )
+            finally:
+                log.debug(f"OllamaParser: [SEMAPHORE RELEASED] Finished chunk {idx}.")
 
     async def parse(
-        self, 
-        client: httpx.AsyncClient, 
-        html_content: str,
-        limit: Optional[int] = None
+        self, client: httpx.AsyncClient, html_content: str, limit: Optional[int] = None
     ) -> List[BusService]:
         """
         Parses the main HTML by finding each bus, triggering its detail
         sub-request, and then parsing each bus individually using Ollama.
         """
-        
-        log.info(f"Using OllamaParser with model {OLLAMA_MODEL} (Native client strategy)...")
-        semaphore = asyncio.Semaphore(OLLAMA_CONCURRENCY_LIMIT)
-        log.info(f"Ollama concurrency limited to {OLLAMA_CONCURRENCY_LIMIT} simultaneous requests.")
 
-        soup = BeautifulSoup(html_content, 'lxml')
-        bus_divs = soup.find_all('div', class_ = 'bus-list')
-        
+        log.info(
+            f"Using OllamaParser with model {OLLAMA_MODEL} (Native client strategy)..."
+        )
+        semaphore = asyncio.Semaphore(OLLAMA_CONCURRENCY_LIMIT)
+        log.info(
+            f"Ollama concurrency limited to {OLLAMA_CONCURRENCY_LIMIT} simultaneous requests."
+        )
+
+        soup = BeautifulSoup(html_content, "lxml")
+        bus_divs = soup.find_all("div", class_="bus-list")
+
         if not bus_divs:
             log.warning("OllamaParser: No 'div.bus-list' elements found in HTML.")
             return []
-        
+
         if limit is not None:
             log.info(f"OllamaParser: Applying limit of {limit} buses.")
             bus_divs = bus_divs[:limit]
 
         # 1. Fetch detailed HTML for all buses SEQUENTIALLY to avoid server state race conditions
         all_details_html = []
-        log.info(f"OllamaParser: Starting sequential detail fetch for {len(bus_divs)} buses...")
+        log.info(
+            f"OllamaParser: Starting sequential detail fetch for {len(bus_divs)} buses..."
+        )
 
         for idx, bus_div in enumerate(bus_divs):
-            a_tag = bus_div.find("a", attrs={"data-target": "#TripcodePopUp", "onclick": True})
+            a_tag = bus_div.find(
+                "a", attrs={"data-target": "#TripcodePopUp", "onclick": True}
+            )
             onclick_attr = a_tag.get("onclick", "") if a_tag else ""
 
             if onclick_attr:
                 # Await each request individually
-                detail_html = await self._call_load_trip_details(client, str(onclick_attr), idx)
+                detail_html = await self._call_load_trip_details(
+                    client, str(onclick_attr), idx
+                )
                 all_details_html.append(detail_html)
             else:
-                log.warning(f"OllamaParser Bus {idx}: No 'onclick' attribute found. Cannot fetch details.")
+                log.warning(
+                    f"OllamaParser Bus {idx}: No 'onclick' attribute found. Cannot fetch details."
+                )
                 all_details_html.append("")
-        
+
         # 2. Create tasks to parse each bus using the two HTML sources
         tasks = []
         for idx, bus_div in enumerate(bus_divs):
             main_list_html = re.sub(r"[\r\n]+", "", str(bus_div))
             detail_table_html = re.sub(r"[\r\n]+", "", str(all_details_html[idx]))
-            
+
             main_list_html = minify_html(str(bus_div))
             detail_table_html = minify_html(all_details_html[idx])
 
             tasks.append(
                 self._wrapper_parse_chunk(
-                    semaphore, 
-                    main_list_html, 
-                    detail_table_html, 
-                    idx
+                    semaphore, main_list_html, detail_table_html, idx
                 )
             )
-        
-        log.info(f"OllamaParser: Awaiting concurrent LLM parsing for {len(tasks)} buses...")
+
+        log.info(
+            f"OllamaParser: Awaiting concurrent LLM parsing for {len(tasks)} buses..."
+        )
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
+
         bus_services: List[BusService] = []
         for idx, res in enumerate(results):
             if isinstance(res, BusService):
                 bus_services.append(res)
             elif isinstance(res, Exception):
-                log.error(f"OllamaParser: Bus {idx}: Failed final parsing attempt after retries. Error: {res}")
-        
+                log.error(
+                    f"OllamaParser: Bus {idx}: Failed final parsing attempt after retries. Error: {res}"
+                )
+
         avg_chars = self.total_chars_sent / max(self.total_requests, 1)
 
         log.info(
@@ -277,5 +294,4 @@ class OllamaParser(AbstractBusParser):
             f"avg {avg_chars:.0f} chars/request."
         )
 
-        
         return bus_services

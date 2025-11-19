@@ -8,38 +8,36 @@ class PlaceInfo(BaseModel):
     """Internal model used to store the parsed ID, Code, and Name for a location."""
 
     id: str = Field(
-        default=..., 
-        description="The internal TNSTC ID for the place. Must be digits only. (e.g., \"488\")"
+        default=...,
+        description='The internal TNSTC ID for the place. Must be digits only. (e.g., "488")',
     )
     code: str = Field(
-        default=..., 
-        description="Three-letter uppercase TNSTC code. Must be 3 uppercase letters. (e.g., \"DHA\")"
+        default=...,
+        description='Three-letter uppercase TNSTC code. Must be 3 uppercase letters. (e.g., "DHA")',
     )
     name: str = Field(
-        default=..., 
-        description="Full normalized name of the place. (e.g., \"DHARMAPURI\")"
+        default=...,
+        description='Full normalized name of the place. (e.g., "DHARMAPURI")',
     )
 
     model_config = {
         "json_schema_extra": {
-            "examples": [
-                {"id": "488", "code": "DHA", "name": "DHARMAPURI"}
-            ]
+            "examples": [{"id": "488", "code": "DHA", "name": "DHARMAPURI"}]
         }
     }
 
-    @field_validator('id')
+    @field_validator("id")
     @classmethod
     def id_must_be_numeric(cls, v: str) -> str:
         if not v.isdigit():
-            raise ValueError('id must only contain digits')
+            raise ValueError("id must only contain digits")
         return v
 
-    @field_validator('code')
+    @field_validator("code")
     @classmethod
     def code_must_be_three_uppercase_letters(cls, v: str) -> str:
-        if not re.fullmatch(r'[A-Z]{3}', v):
-            raise ValueError('code must be exactly three uppercase letters')
+        if not re.fullmatch(r"[A-Z]{3}", v):
+            raise ValueError("code must be exactly three uppercase letters")
         return v
 
 
@@ -47,55 +45,51 @@ class BusService(BaseModel):
     """Output model representing a single available bus service and its details."""
 
     operator: str = Field(
-        default=..., 
-        description="Name of the operating corporation. (e.g., \"SALEM\", \"TNSTC-VILLUPURAM\")"
+        default=...,
+        description='Name of the operating corporation. (e.g., "SALEM", "TNSTC-VILLUPURAM")',
     )
     bus_type: str = Field(
-        default=..., 
-        description="Type or class of the bus. (e.g., \"AC 3X2\", \"ULTRA DELUXE\", \"AC SLEEPER\")"
+        default=...,
+        description='Type or class of the bus. (e.g., "AC 3X2", "ULTRA DELUXE", "AC SLEEPER")',
     )
-    
+
     trip_code: str = Field(
-        default="N/A", 
-        description="Unique service code. (e.g., \"2215DHACHEDD02A\")"
+        default="N/A", description='Unique service code. (e.g., "2215DHACHEDD02A")'
     )
     route_code: str = Field(
-        default="N/A", 
-        description="TNSTC internal route identifier. (e.g., \"275H\")"
+        default="N/A", description='TNSTC internal route identifier. (e.g., "275H")'
     )
-    
+
     departure_time: str = Field(
-        default=..., 
-        description="Scheduled departure time. Must be 24-hour HH:MM format. (e.g., \"22:15\")"
+        default=...,
+        description='Scheduled departure time. Must be 24-hour HH:MM format. (e.g., "22:15")',
     )
     arrival_time: str = Field(
-        default=..., 
-        description="Scheduled arrival time. Must be 24-hour HH:MM format. (e.g., \"04:50\")"
+        default=...,
+        description='Scheduled arrival time. Must be 24-hour HH:MM format. (e.g., "04:50")',
     )
     duration: str = Field(
-        default=..., 
-        description="Total journey duration as a float string in decimal hours (H.HH). (e.g., \"7.50\" for 7h 30m, \"7.75\" for 7h 45m)"
+        default=...,
+        description='Total journey duration as a float string in decimal hours (H.HH). (e.g., "7.50" for 7h 30m, "7.75" for 7h 45m)',
     )
     price_in_rs: int = Field(
-        default=..., 
-        description="Base ticket price in Rupees. (e.g., 350)"
+        default=..., description="Base ticket price in Rupees. (e.g., 350)"
     )
     seats_available: int = Field(
-        default=..., 
-        description="Number of available seats. (e.g., 20)"
+        default=..., description="Number of available seats. (e.g., 20)"
     )
     via_route: Optional[List[str]] = Field(
-        default=None, 
-        description="List of key intermediate stops on the route. (e.g., [\"TIRUPATHUR\", \"VELLORE\"])"
+        default=None,
+        description='List of key intermediate stops on the route. (e.g., ["TIRUPATHUR", "VELLORE"])',
     )
 
     total_kms: Optional[str] = Field(
-        default=None, 
-        description="Approximate total distance in kilometers. (e.g., \"308.00\")"
+        default=None,
+        description='Approximate total distance in kilometers. (e.g., "308.00")',
     )
     child_fare: Optional[str] = Field(
-        default="NA", 
-        description="Child fare, if available. Use 'NA' if not applicable. (e.g., \"175\" or \"NA\")"
+        default="NA",
+        description='Child fare, if available. Use \'NA\' if not applicable. (e.g., "175" or "NA")',
     )
 
     model_config = {
@@ -113,60 +107,60 @@ class BusService(BaseModel):
                     "seats_available": 20,
                     "via_route": ["TIRUPATHUR", "VELLORE"],
                     "total_kms": "308.00",
-                    "child_fare": "NA"
+                    "child_fare": "NA",
                 }
             ]
         }
     }
 
-    @field_validator('departure_time', 'arrival_time')
+    @field_validator("departure_time", "arrival_time")
     @classmethod
     def validate_time_format(cls, v: str) -> str:
-        if not re.fullmatch(r'([01]\d|2[0-3]):[0-5]\d', v):
-            raise ValueError('time must be in HH:MM 24-hour format')
+        if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", v):
+            raise ValueError("time must be in HH:MM 24-hour format")
         return v
 
-    @field_validator('duration')
+    @field_validator("duration")
     @classmethod
     def validate_and_normalize_duration(cls, v: str) -> str:
         """
         Validates duration is positive and normalizes it to a float string.
         Handles both "HH:MM" (e.g., "7:30") and float-string (e.g., "7.45").
         """
-        
+
         v = v.replace("Hrs", "").strip()
-        
-        if ':' in v:
+
+        if ":" in v:
             # Handle "HH:MM" format from the new parser
             try:
-                hours, minutes = v.split(':')
+                hours, minutes = v.split(":")
                 total_hours = int(hours) + (int(minutes) / 60)
                 if total_hours <= 0:
-                        raise ValueError('duration must be positive')
-                
+                    raise ValueError("duration must be positive")
+
                 # Return as standardized float string, e.g., "7.50"
-                return f"{total_hours:.2f}" 
+                return f"{total_hours:.2f}"
             except Exception:
-                raise ValueError('invalid HH:MM duration format')
+                raise ValueError("invalid HH:MM duration format")
         else:
             # Handle float string format (e.g., "7.45") from the old parser
             try:
                 if float(v) <= 0:
-                        raise ValueError('duration must be positive')
-                
+                    raise ValueError("duration must be positive")
+
                 # Already in the correct format
                 return v
             except ValueError:
-                raise ValueError('duration must be a valid float string or HH:MM')
+                raise ValueError("duration must be a valid float string or HH:MM")
 
-    @field_validator('price_in_rs', 'seats_available')
+    @field_validator("price_in_rs", "seats_available")
     @classmethod
     def non_negative(cls, v: int) -> int:
         if v < 0:
-            raise ValueError('must be non-negative')
+            raise ValueError("must be non-negative")
         return v
-    
-    @field_validator('child_fare')
+
+    @field_validator("child_fare")
     @classmethod
     def set_child_fare_na_if_none(cls, v: Optional[str]) -> str:
         """Converts a null/None child_fare to 'NA'."""
@@ -179,44 +173,40 @@ class SearchRequest(BaseModel):
     """Input model defining the required parameters for a bus search, now including optional filters."""
 
     from_place_name: str = Field(
-        default=..., 
-        description="Starting city name. (e.g., \"Dharmapuri\")"
+        default=..., description='Starting city name. (e.g., "Dharmapuri")'
     )
     to_place_name: str = Field(
-        default=..., 
-        description="Destination name. (e.g., \"CHENNAI-PT DR. M.G.R. BS\")"
+        default=..., description='Destination name. (e.g., "CHENNAI-PT DR. M.G.R. BS")'
     )
     onward_date: str = Field(
-        default=..., 
-        description="Travel date in DD/MM/YYYY format. (e.g., \"09/11/2025\")"
+        default=...,
+        description='Travel date in DD/MM/YYYY format. (e.g., "09/11/2025")',
     )
     return_date: Optional[str] = Field(
-        default=None, 
-        description="Optional return date in DD/MM/YYYY format. (e.g., \"15/11/2025\")"
+        default=None,
+        description='Optional return date in DD/MM/YYYY format. (e.g., "15/11/2025")',
     )
 
     # Filter Fields
     min_price_in_rs: Optional[int] = Field(
-        default=100, 
-        description="Minimum allowed ticket price in Rupees. (e.g., 200)"
+        default=100, description="Minimum allowed ticket price in Rupees. (e.g., 200)"
     )
     max_price_in_rs: Optional[int] = Field(
-        default=1000, 
-        description="Maximum allowed ticket price in Rupees. (e.g., 800)"
+        default=1000, description="Maximum allowed ticket price in Rupees. (e.g., 800)"
     )
-    
+
     min_departure_time: Optional[str] = Field(
-        default="00:00", 
-        description="Earliest desired departure time. Must be HH:MM format. (e.g., \"18:00\")"
-    ) 
+        default="00:00",
+        description='Earliest desired departure time. Must be HH:MM format. (e.g., "18:00")',
+    )
     max_departure_time: Optional[str] = Field(
-        default="23:59", 
-        description="Latest desired departure time. Must be HH:MM format. (e.g., \"23:59\")"
-    ) 
-    
+        default="23:59",
+        description='Latest desired departure time. Must be HH:MM format. (e.g., "23:59")',
+    )
+
     allowed_bus_types: Optional[List[str]] = Field(
-        default=None, 
-        description="List of preferred bus type strings. If None, all types are allowed. (e.g., [\"AC SLEEPER\", \"ULTRA DELUXE\"])"
+        default=None,
+        description='List of preferred bus type strings. If None, all types are allowed. (e.g., ["AC SLEEPER", "ULTRA DELUXE"])',
     )
 
     model_config = {
@@ -231,57 +221,57 @@ class SearchRequest(BaseModel):
                     "max_price_in_rs": 800,
                     "min_departure_time": "18:00",
                     "max_departure_time": "23:59",
-                    "allowed_bus_types": ["AC SLEEPER", "ULTRA DELUXE"]
+                    "allowed_bus_types": ["AC SLEEPER", "ULTRA DELUXE"],
                 }
             ]
         }
     }
 
-    @field_validator('from_place_name', 'to_place_name')
+    @field_validator("from_place_name", "to_place_name")
     @classmethod
     def names_must_not_be_empty(cls, v: str) -> str:
         if not v.strip():
-            raise ValueError('place name must not be empty')
+            raise ValueError("place name must not be empty")
         return v
 
-    @field_validator('onward_date', 'return_date', mode='before')
+    @field_validator("onward_date", "return_date", mode="before")
     @classmethod
     def validate_date_format(cls, v: Optional[str]) -> Optional[str]:
         if v and v != "DD/MM/YYYY":
-            datetime.strptime(v, '%d/%m/%Y')
+            datetime.strptime(v, "%d/%m/%Y")
         return v
 
-    @field_validator('min_departure_time', 'max_departure_time', mode='before')
+    @field_validator("min_departure_time", "max_departure_time", mode="before")
     @classmethod
     def validate_time_format(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None and not re.fullmatch(r'([01]\d|2[0-3]):[0-5]\d', v):
-            raise ValueError('time must be in HH:MM 24-hour format')
+        if v is not None and not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", v):
+            raise ValueError("time must be in HH:MM 24-hour format")
         return v
-    
-    @field_validator('min_price_in_rs', 'max_price_in_rs', mode='before')
+
+    @field_validator("min_price_in_rs", "max_price_in_rs", mode="before")
     @classmethod
     def non_negative_price(cls, v: Optional[int]) -> Optional[int]:
         if v is not None and v < 0:
-            raise ValueError('price must be non-negative')
+            raise ValueError("price must be non-negative")
         return v
+
 
 class ResponseMetadata(BaseModel):
     """Contains metadata about the search request and response."""
+
     search_timestamp: datetime = Field(
-        ..., 
-        description="Timestamp of when the search was executed. (e.g., \"2025-11-12T17:30:00.123456\")"
+        ...,
+        description='Timestamp of when the search was executed. (e.g., "2025-11-12T17:30:00.123456")',
     )
     parser_strategy: str = Field(
-        ..., 
-        description="The parsing strategy used. (e.g., 'beautifulsoup', 'gemini')"
+        ..., description="The parsing strategy used. (e.g., 'beautifulsoup', 'gemini')"
     )
     total_services_found_before_filtering: int = Field(
-        ..., 
-        description="Total services found before applying filters. (e.g., 25)"
+        ..., description="Total services found before applying filters. (e.g., 25)"
     )
     limit_applied: Optional[int] = Field(
-        default=None, 
-        description="The 'limit' parameter used for the search, if any. (e.g., 10)"
+        default=None,
+        description="The 'limit' parameter used for the search, if any. (e.g., 10)",
     )
 
 
@@ -289,10 +279,19 @@ class BusSearchResponse(BaseModel):
     """
     Final output model for the bus search, including metadata like place names and internal codes.
     """
-    from_place: PlaceInfo = Field(..., description="Details of the confirmed starting place.")
-    to_place: PlaceInfo = Field(..., description="Details of the confirmed destination place.")
-    services: List[BusService] = Field(..., description="List of available bus services.")
-    metadata: ResponseMetadata = Field(..., description="Metadata about the search operation.")
+
+    from_place: PlaceInfo = Field(
+        ..., description="Details of the confirmed starting place."
+    )
+    to_place: PlaceInfo = Field(
+        ..., description="Details of the confirmed destination place."
+    )
+    services: List[BusService] = Field(
+        ..., description="List of available bus services."
+    )
+    metadata: ResponseMetadata = Field(
+        ..., description="Metadata about the search operation."
+    )
 
     @computed_field
     @property
@@ -304,15 +303,11 @@ class BusSearchResponse(BaseModel):
         "json_schema_extra": {
             "examples": [
                 {
-                    "from_place": {
-                        "id": "488",
-                        "code": "DHA",
-                        "name": "DHARMAPURI"
-                    },
+                    "from_place": {"id": "488", "code": "DHA", "name": "DHARMAPURI"},
                     "to_place": {
                         "id": "275",
                         "code": "CHEDD",
-                        "name": "CHENNAI-PT DR. M.G.R. BS"
+                        "name": "CHENNAI-PT DR. M.G.R. BS",
                     },
                     "services": [
                         {
@@ -327,7 +322,7 @@ class BusSearchResponse(BaseModel):
                             "seats_available": 20,
                             "via_route": ["TIRUPATHUR", "VELLORE"],
                             "total_kms": "308.00",
-                            "child_fare": "NA"
+                            "child_fare": "NA",
                         }
                     ],
                     "services_count_after_filtering": 1,
@@ -335,19 +330,21 @@ class BusSearchResponse(BaseModel):
                         "search_timestamp": "2025-11-12T17:30:00.123456",
                         "parser_strategy": "beautifulsoup",
                         "total_services_found_before_filtering": 25,
-                        "limit_applied": 10
+                        "limit_applied": 10,
                     },
                 }
             ]
         }
     }
 
+
 class BusServiceWithReasoning(BusService):
     """
     Temporary schema used by the LLM to include its reasoning.
     Inherits all fields and validators from BusService.
     """
+
     llm_reasoning: Optional[str] = Field(
-        default=None, 
-        description="**LLM REASONING ONLY:** A concise, step-by-step summary of how you found each value. For Price, Duration, and Seats, you MUST specify if the value came from the 'Main List HTML' or the 'Details Page HTML'. (e.g., 'Price (350) and Seats (20) from Main List. Duration (7.45) from Details Page.' Also include how fallbacks were decided and why ?)"
+        default=None,
+        description="**LLM REASONING ONLY:** A concise, step-by-step summary of how you found each value. For Price, Duration, and Seats, you MUST specify if the value came from the 'Main List HTML' or the 'Details Page HTML'. (e.g., 'Price (350) and Seats (20) from Main List. Duration (7.45) from Details Page.' Also include how fallbacks were decided and why ?)",
     )

@@ -19,6 +19,7 @@ from .prompt_builder import PromptGenerator
 setup_logging()
 log = logging.getLogger(__name__)
 
+
 class GeminiParser(AbstractBusParser):
     """
     Implements the BusParser interface using the LangChain Google Generative AI
@@ -27,36 +28,39 @@ class GeminiParser(AbstractBusParser):
 
     def __init__(self):
         if not GEMINI_API_KEY:
-            raise ValueError("GEMINI_API_KEY environment variable is not set. Cannot use GeminiParser.")
-        
+            raise ValueError(
+                "GEMINI_API_KEY environment variable is not set. Cannot use GeminiParser."
+            )
+
         try:
             self.llm = ChatGoogleGenerativeAI(
-                model=GEMINI_MODEL, 
+                model=GEMINI_MODEL,
                 api_key=GEMINI_API_KEY,
                 request_timeout=GEMINI_LOAD_TIMEOUT,
-                temperature=0.0
+                temperature=0.0,
             )
 
             self.prompt_gen = PromptGenerator()
 
-            self.structured_llm = self.llm.with_structured_output(BusServiceWithReasoning)
+            self.structured_llm = self.llm.with_structured_output(
+                BusServiceWithReasoning
+            )
         except ImportError:
-            log.error("LangChain Google GENAI library not found. Please install 'langchain-google-genai'")
+            log.error(
+                "LangChain Google GENAI library not found. Please install 'langchain-google-genai'"
+            )
             raise
         except Exception as e:
             log.error(f"Failed to initialize Gemini LLM: {e}")
             raise
-        
+
         self.system_prompt = self.prompt_gen.build_system_prompt(BusService)
         self.few_shot_examples = self.prompt_gen._build_few_shot_examples()
         self.total_chars_sent = 0
         self.total_requests = 0
-            
+
     async def _parse_bus_with_langchain(
-        self,
-        main_list_html: str,
-        detail_table_html: str,
-        bus_index: int
+        self, main_list_html: str, detail_table_html: str, bus_index: int
     ) -> Optional[BusService]:
         """
         Parses a single bus by sending its two HTML sources to Gemini.
@@ -120,13 +124,13 @@ class GeminiParser(AbstractBusParser):
 
         messages = [
             SystemMessage(content=self.system_prompt),
-            HumanMessage(content=user_prompt)
+            HumanMessage(content=user_prompt),
         ]
-        
+
         retry_config = Retrying(
             wait=wait_exponential(multiplier=1, min=2, max=60),
             stop=stop_after_attempt(5),
-            reraise=True
+            reraise=True,
         )
 
         for attempt in retry_config:
@@ -135,44 +139,55 @@ class GeminiParser(AbstractBusParser):
                 self.total_chars_sent += message_size
                 self.total_requests += 1
 
-                log.info(f"LLM_Parser Bus {bus_index} (Attempt {attempt.retry_state.attempt_number}): Sending Cleaned HTML ({message_size} chars) to LLM.") 
-                
+                log.info(
+                    f"LLM_Parser Bus {bus_index} (Attempt {attempt.retry_state.attempt_number}): Sending Cleaned HTML ({message_size} chars) to LLM."
+                )
+
                 try:
                     service_with_reasoning = await self.structured_llm.ainvoke(messages)
 
                     if isinstance(service_with_reasoning, BusServiceWithReasoning):
-                        
-                        log.info(f"LLM_Parser Bus {bus_index} SUCCESS: Extracted details for '{service_with_reasoning.operator}' (Price: {service_with_reasoning.price_in_rs}, Trip: {service_with_reasoning.trip_code}).") 
+                        log.info(
+                            f"LLM_Parser Bus {bus_index} SUCCESS: Extracted details for '{service_with_reasoning.operator}' (Price: {service_with_reasoning.price_in_rs}, Trip: {service_with_reasoning.trip_code})."
+                        )
                         if service_with_reasoning.llm_reasoning:
-                            log.info(f"LLM Reasoning for Bus {bus_index}: {service_with_reasoning.llm_reasoning}")
-                        
-                        return BusService.model_validate(service_with_reasoning.model_dump())
+                            log.info(
+                                f"LLM Reasoning for Bus {bus_index}: {service_with_reasoning.llm_reasoning}"
+                            )
+
+                        return BusService.model_validate(
+                            service_with_reasoning.model_dump()
+                        )
                     else:
-                        log.error(f"GeminiParser: Bus {bus_index}: LangChain returned unexpected type: {type(service_with_reasoning)}")
+                        log.error(
+                            f"GeminiParser: Bus {bus_index}: LangChain returned unexpected type: {type(service_with_reasoning)}"
+                        )
                         raise TypeError("LLM returned wrong type")
-                
+
                 except ValidationError as e:
-                    log.error(f"LLM_Parser Bus {bus_index}: Pydantic validation failed. Error: {e}", exc_info=True)
+                    log.error(
+                        f"LLM_Parser Bus {bus_index}: Pydantic validation failed. Error: {e}",
+                        exc_info=True,
+                    )
                     raise
                 except Exception as e:
-                    log.error(f"GeminiParser: Bus {bus_index}: Failed during LangChain invocation: {e}")
+                    log.error(
+                        f"GeminiParser: Bus {bus_index}: Failed during LangChain invocation: {e}"
+                    )
                     raise
 
     async def parse(
-        self, 
-        client: httpx.AsyncClient, 
-        html_content: str,
-        limit: Optional[int] = None
+        self, client: httpx.AsyncClient, html_content: str, limit: Optional[int] = None
     ) -> List[BusService]:
         """
         Parses the main HTML by finding each bus, triggering its detail
         sub-request, and then parsing each bus individually using Gemini.
         """
         log.info("Using GeminiParser to parse bus results (LangChain strategy)...")
-        
-        soup = BeautifulSoup(html_content, 'lxml')
-        bus_divs = soup.find_all('div', class_ = 'bus-list')
-        
+
+        soup = BeautifulSoup(html_content, "lxml")
+        bus_divs = soup.find_all("div", class_="bus-list")
+
         if not bus_divs:
             log.warning("GeminiParser: No 'div.bus-list' elements found in HTML.")
             return []
@@ -183,18 +198,26 @@ class GeminiParser(AbstractBusParser):
 
         # 1. Fetch detailed HTML for all buses SEQUENTIALLY to avoid server state race conditions
         all_details_html = []
-        log.info(f"GeminiParser: Starting sequential detail fetch for {len(bus_divs)} buses...")
-        
+        log.info(
+            f"GeminiParser: Starting sequential detail fetch for {len(bus_divs)} buses..."
+        )
+
         for idx, bus_div in enumerate(bus_divs):
-            a_tag = bus_div.find("a", attrs={"data-target": "#TripcodePopUp", "onclick": True})
+            a_tag = bus_div.find(
+                "a", attrs={"data-target": "#TripcodePopUp", "onclick": True}
+            )
             onclick_attr = a_tag.get("onclick", "") if a_tag else ""
 
             if onclick_attr:
                 # Await each request individually
-                detail_html = await self._call_load_trip_details(client, str(onclick_attr), idx)
+                detail_html = await self._call_load_trip_details(
+                    client, str(onclick_attr), idx
+                )
                 all_details_html.append(detail_html)
             else:
-                log.warning(f"GeminiParser Bus {idx}: No 'onclick' attribute found. Cannot fetch details.")
+                log.warning(
+                    f"GeminiParser Bus {idx}: No 'onclick' attribute found. Cannot fetch details."
+                )
                 all_details_html.append("")
 
         # 2. Create tasks to parse each bus using the two HTML sources
@@ -202,33 +225,35 @@ class GeminiParser(AbstractBusParser):
         for idx, bus_div in enumerate(bus_divs):
             main_list_html = re.sub(r"[\r\n]+", "", str(bus_div))
             detail_table_html = re.sub(r"[\r\n]+", "", str(all_details_html[idx]))
-            
+
             main_list_html = minify_html(str(bus_div))
             detail_table_html = minify_html(all_details_html[idx])
-            
+
             parsing_tasks.append(
-                self._parse_bus_with_langchain(
-                    main_list_html, 
-                    detail_table_html, 
-                    idx
-                )
+                self._parse_bus_with_langchain(main_list_html, detail_table_html, idx)
             )
-        
+
         # 3. Gather all parsing results
-        log.info(f"GeminiParser: Awaiting concurrent LLM parsing for {len(parsing_tasks)} buses...")
+        log.info(
+            f"GeminiParser: Awaiting concurrent LLM parsing for {len(parsing_tasks)} buses..."
+        )
         results = await asyncio.gather(*parsing_tasks, return_exceptions=True)
-        
+
         bus_services: List[BusService] = []
         for idx, res in enumerate(results):
             if isinstance(res, BusService):
                 bus_services.append(res)
             elif isinstance(res, Exception):
-                log.error(f"GeminiParser: Bus {idx}: Failed final parsing attempt after retries. Error: {res}")
+                log.error(
+                    f"GeminiParser: Bus {idx}: Failed final parsing attempt after retries. Error: {res}"
+                )
 
         avg_chars = self.total_chars_sent / max(self.total_requests, 1)
 
-        log.info(f"GeminiParser: Successfully parsed {len(bus_services)} / {len(bus_divs)} bus services. "
-                 f"Summary: {self.total_requests} requests, {self.total_chars_sent} total chars sent, "
-                 f"avg {avg_chars:.0f} chars/request.")
-        
+        log.info(
+            f"GeminiParser: Successfully parsed {len(bus_services)} / {len(bus_divs)} bus services. "
+            f"Summary: {self.total_requests} requests, {self.total_chars_sent} total chars sent, "
+            f"avg {avg_chars:.0f} chars/request."
+        )
+
         return bus_services

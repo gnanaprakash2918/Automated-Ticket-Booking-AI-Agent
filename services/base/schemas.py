@@ -6,12 +6,15 @@ from pydantic import BaseModel
 
 class Place(BaseModel):
     """Generic place model."""
+
     name: str
     code: str
     id: Optional[str] = None
 
+
 class TransportService(BaseModel):
     """Generic transport service model."""
+
     operator: str
     service_type: str
     departure_time: str
@@ -22,9 +25,11 @@ class TransportService(BaseModel):
     seats_available: int
     source: str
     destination: str
-    
+
+
 class SearchResult(BaseModel):
     """Generic search result."""
+
     source_place: Place
     destination_place: Place
     services: List[TransportService]
