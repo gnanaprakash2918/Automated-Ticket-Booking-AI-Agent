@@ -1,6 +1,6 @@
 [project]
 name = "automated-ai-ticket-booking-agent"
-version = "0.1.0"
+version = "0.1"
 description = "Automated AI Ticket Booking Agent"
 authors = [{ name = "Gnana Prakash M" }]
 requires-python = ">=3.12"
