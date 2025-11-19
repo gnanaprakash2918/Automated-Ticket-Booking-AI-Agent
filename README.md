@@ -6,6 +6,8 @@
 - `powershell.exe -noprofile -executionpolicy bypass -file .\.venv\Scripts\activate.ps1`
 - `pip install -r requirements.txt --only-binary=ruff`
 - `python -m tnstc_api.main`
+- `ruff format .`
+- `ruff check . --fix`
 
 ## Utility Commands
 

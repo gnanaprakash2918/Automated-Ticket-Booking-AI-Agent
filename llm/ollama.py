@@ -1,8 +1,8 @@
 import os
-from typing import Type, Optional, Any, cast
+from typing import Any, Optional, Type, cast
 import ollama
-
 from llm.interface import LLMInterface, T
+
 
 class OllamaLLM(LLMInterface):
     """

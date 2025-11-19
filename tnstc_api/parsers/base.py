@@ -1,12 +1,12 @@
-import httpx
-from typing import List, Optional
 from abc import ABC, abstractmethod
-import re
 import logging
+import re
+from typing import List, Optional
+import httpx
+from utils.logging_setup import setup_logging
 from ..config import TNSTC_DETAILS_URL
 from ..schemas import BusService
 
-from utils.logging_setup import setup_logging
 
 setup_logging()
 log = logging.getLogger(__name__)

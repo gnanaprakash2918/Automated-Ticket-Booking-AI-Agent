@@ -1,11 +1,10 @@
 from typing import Optional, cast
-
 from ..config import PARSER_STRATEGY
 from .base import AbstractBusParser as BusParser
-
 from .bs_parser import BeautifulSoupParser
 from .gemini_parser import GeminiParser
 from .ollama_parser import OllamaParser
+
 
 _parser_instance: Optional[BusParser] = None
 
@@ -26,7 +25,7 @@ def get_parser() -> BusParser:
            (isinstance(_parser_instance, OllamaParser) and current_strategy == "ollama"):
             return cast(BusParser, _parser_instance)
         else:
-            print(f"Parser strategy changed. Re-initializing parser...")
+            print("Parser strategy changed. Re-initializing parser...")
 
     _parser_instance = None
 

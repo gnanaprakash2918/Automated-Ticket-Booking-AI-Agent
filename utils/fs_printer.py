@@ -1,5 +1,6 @@
 import os
 
+
 def print_structure(path, indent=0, ignore_folders=None):
     if ignore_folders is None:
         ignore_folders = []

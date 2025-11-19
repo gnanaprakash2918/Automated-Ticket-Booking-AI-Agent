@@ -1,17 +1,16 @@
-import logging
 import asyncio
-import httpx
+import logging
 from typing import List, Optional
-from tenacity import wait_exponential, stop_after_attempt, Retrying
 from bs4 import BeautifulSoup
-
-from .base import AbstractBusParser
+import httpx
+from tenacity import Retrying, stop_after_attempt, wait_exponential
 from llm.gemini import GeminiLLM
 from llm.interface import LLMInterface
-
 from utils.helpers import minify_html
 from utils.logging_setup import setup_logging
 from ..schemas import TNSTCBusService
+from .base import AbstractBusParser
+
 
 setup_logging()
 log = logging.getLogger(__name__)

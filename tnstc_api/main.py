@@ -1,17 +1,16 @@
-from fastapi import FastAPI, status, Query
-from .tnstc_client import get_place_info, parse_bus_results, filter_bus_services
-from fastapi.middleware.cors import CORSMiddleware
-import logging
-import uvicorn
-import httpx
-from fastapi import FastAPI, HTTPException
-from .schemas import SearchRequest, BusSearchResponse, ResponseMetadata
 import asyncio
-import logging
-from .config import TNSTC_BASE_URL, PARSER_STRATEGY, GEMINI_MODEL, OLLAMA_MODEL, APP_ENV
-from typing import Optional
 from datetime import datetime
+import logging
+from typing import Optional
+from fastapi import FastAPI, HTTPException, Query, status
+from fastapi.middleware.cors import CORSMiddleware
+import httpx
+import uvicorn
 from utils.logging_setup import setup_logging
+from .config import APP_ENV, GEMINI_MODEL, OLLAMA_MODEL, PARSER_STRATEGY, TNSTC_BASE_URL
+from .schemas import BusSearchResponse, ResponseMetadata, SearchRequest
+from .tnstc_client import filter_bus_services, get_place_info, parse_bus_results
+
 
 setup_logging()
 log = logging.getLogger(__name__)

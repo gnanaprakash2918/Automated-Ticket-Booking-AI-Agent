@@ -1,7 +1,8 @@
-import aiosqlite
 import logging
-from typing import Optional, NamedTuple
 from pathlib import Path
+from typing import NamedTuple, Optional
+import aiosqlite
+
 
 log = logging.getLogger(__name__)
 

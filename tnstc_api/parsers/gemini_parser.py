@@ -1,24 +1,20 @@
-import re
-import httpx
-from typing import List, Optional
-import logging
-from tenacity import wait_exponential, stop_after_attempt, Retrying
 import asyncio
+import logging
+import re
+from typing import List, Optional
 from bs4 import BeautifulSoup
-from pydantic import ValidationError
-
-from langchain_google_genai import ChatGoogleGenerativeAI
+import httpx
 from langchain_core.messages import HumanMessage, SystemMessage
-
+from langchain_google_genai import ChatGoogleGenerativeAI
+from pydantic import ValidationError
+from tenacity import Retrying, stop_after_attempt, wait_exponential
 from utils.helpers import minify_html
-
-from .prompt_builder import PromptGenerator
-from .base import AbstractBusParser 
-
-from ..schemas import BusService, BusServiceWithReasoning
-from ..config import GEMINI_API_KEY, GEMINI_MODEL, GEMINI_LOAD_TIMEOUT
-
 from utils.logging_setup import setup_logging
+from ..config import GEMINI_API_KEY, GEMINI_LOAD_TIMEOUT, GEMINI_MODEL
+from ..schemas import BusService, BusServiceWithReasoning
+from .base import AbstractBusParser
+from .prompt_builder import PromptGenerator
+
 
 setup_logging()
 log = logging.getLogger(__name__)
@@ -172,7 +168,7 @@ class GeminiParser(AbstractBusParser):
         Parses the main HTML by finding each bus, triggering its detail
         sub-request, and then parsing each bus individually using Gemini.
         """
-        log.info(f"Using GeminiParser to parse bus results (LangChain strategy)...")
+        log.info("Using GeminiParser to parse bus results (LangChain strategy)...")
         
         soup = BeautifulSoup(html_content, 'lxml')
         bus_divs = soup.find_all('div', class_ = 'bus-list')

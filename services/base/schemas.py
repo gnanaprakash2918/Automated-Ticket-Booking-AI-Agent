@@ -1,7 +1,8 @@
 # Not Used for Now
 
+from typing import List, Optional
 from pydantic import BaseModel
-from typing import Optional, List
+
 
 class Place(BaseModel):
     """Generic place model."""

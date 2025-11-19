@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
+
 class BaseService(ABC):
     """
     Abstract Base Class for Transport Services (e.g., TNSTC, RedBus).

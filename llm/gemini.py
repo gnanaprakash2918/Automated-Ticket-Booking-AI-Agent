@@ -1,9 +1,9 @@
 import os
-from typing import Type, cast, Any, Optional
+from typing import Any, Optional, Type, cast
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import SystemMessage, HumanMessage
+from llm.interface import LLMInterface, T
 
-from llm.interface import T, LLMInterface
 
 class GeminiLLM(LLMInterface):
     """

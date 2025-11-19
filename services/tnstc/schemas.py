@@ -1,7 +1,8 @@
-from pydantic import BaseModel, Field, field_validator, computed_field
-from typing import Optional, List
 from datetime import datetime
 import re
+from typing import List, Optional
+from pydantic import BaseModel, Field, computed_field, field_validator
+
 
 class TNSTCPlaceInfo(BaseModel):
     """Internal model used to store the parsed ID, Code, and Name for a location."""

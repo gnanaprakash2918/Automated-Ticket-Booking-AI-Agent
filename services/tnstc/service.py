@@ -1,15 +1,15 @@
-import httpx
 import logging
 import re
 from typing import List
 from async_lru import alru_cache
-
 from base.service import BaseService
-from .schemas import TNSTCPlaceInfo, TNSTCBusService, TNSTCSearchRequest
+import httpx
+from utils.logging_setup import setup_logging
+from .config import TNSTC_BASE_URL
 from .parsers import get_parser
 from .parsers.base import AbstractBusParser
-from .config import TNSTC_BASE_URL
-from utils.logging_setup import setup_logging
+from .schemas import TNSTCBusService, TNSTCPlaceInfo, TNSTCSearchRequest
+
 
 setup_logging()
 log = logging.getLogger(__name__)

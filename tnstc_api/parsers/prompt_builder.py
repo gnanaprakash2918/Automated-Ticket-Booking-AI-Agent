@@ -4,6 +4,7 @@ from typing import List, Type
 from pydantic import BaseModel
 from utils.helpers import minify_html
 
+
 class PromptGenerator:
     def build_system_prompt(self, pydantic_model: Type[BaseModel]) -> str:
         json_schema = pydantic_model.model_json_schema()

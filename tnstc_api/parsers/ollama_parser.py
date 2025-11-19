@@ -1,23 +1,20 @@
+import asyncio
+import json
+import logging
 import re
-import httpx
 from typing import List, Optional
 from bs4 import BeautifulSoup
-from pydantic import ValidationError
-
-from ..schemas import BusService
-import asyncio
-import logging
-from ..config import OLLAMA_MODEL, OLLAMA_CONCURRENCY_LIMIT, OLLAMA_BASE_URL
-from tenacity import wait_exponential, stop_after_attempt, Retrying
-
+import httpx
 import ollama
-import json
-
-from utils.helpers import minify_html, calculate_message_size
-from .prompt_builder import PromptGenerator
-from .base import AbstractBusParser 
-
+from pydantic import ValidationError
+from tenacity import Retrying, stop_after_attempt, wait_exponential
+from utils.helpers import calculate_message_size, minify_html
 from utils.logging_setup import setup_logging
+from ..config import OLLAMA_BASE_URL, OLLAMA_CONCURRENCY_LIMIT, OLLAMA_MODEL
+from ..schemas import BusService
+from .base import AbstractBusParser
+from .prompt_builder import PromptGenerator
+
 
 setup_logging()
 log = logging.getLogger(__name__)

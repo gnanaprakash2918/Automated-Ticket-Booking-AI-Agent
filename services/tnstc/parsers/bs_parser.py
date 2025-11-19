@@ -1,12 +1,12 @@
-import httpx
-from typing import List, Optional, Dict, Any
-from bs4 import BeautifulSoup, Tag
-from ..schemas import TNSTCBusService
-import re
 import logging
+import re
+from typing import Any, Dict, List, Optional
+from bs4 import BeautifulSoup, Tag
+import httpx
+from utils.logging_setup import setup_logging
+from ..schemas import TNSTCBusService
 from .base import AbstractBusParser
 
-from utils.logging_setup import setup_logging
 
 setup_logging()
 log = logging.getLogger(__name__)

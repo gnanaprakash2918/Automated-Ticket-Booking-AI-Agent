@@ -1,9 +1,10 @@
-from bs4 import BeautifulSoup, Comment, Tag
-import re
-from typing import Any, get_args, get_origin, Union, Annotated, List, Type, Dict
-import json
 import inspect
+import json
+import re
+from typing import Annotated, Any, Dict, List, Type, Union, get_args, get_origin
+from bs4 import BeautifulSoup, Comment, Tag
 from pydantic import BaseModel
+
 
 BOOTSTRAP_UTIL_RE = re.compile(
     r'^(?:'

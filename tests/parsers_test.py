@@ -1,20 +1,20 @@
 import asyncio
-import httpx
-import logging
-from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
-from rich.text import Text
 from datetime import date
-from typing import Any, List, Dict
+import logging
 from pathlib import Path
-
-from tnstc_api.schemas import SearchRequest, BusService
-from tnstc_api.tnstc_client import get_place_info
+from typing import Any, Dict, List
+import httpx
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
 from tnstc_api.parsers.bs_parser import BeautifulSoupParser
 from tnstc_api.parsers.gemini_parser import GeminiParser
 from tnstc_api.parsers.ollama_parser import OllamaParser
+from tnstc_api.schemas import BusService, SearchRequest
+from tnstc_api.tnstc_client import get_place_info
 from utils.logging_setup import setup_logging
+
 
 OUT_HTML_LOG = Path(__file__).with_name("retrieved_htmls.txt")
 

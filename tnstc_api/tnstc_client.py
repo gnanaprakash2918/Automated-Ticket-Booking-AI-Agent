@@ -1,15 +1,15 @@
-import httpx
-from fastapi import HTTPException, status
-from typing import Optional, List
-from .schemas import PlaceInfo, BusService, SearchRequest 
-import re
 import logging
-from utils.logging_setup import setup_logging
+import re
+from typing import List, Optional
 from async_lru import alru_cache
+from fastapi import HTTPException, status
+import httpx
+from utils.logging_setup import setup_logging
 from .config import TNSTC_BASE_URL
-
 from .parsers import get_parser
 from .parsers.base import AbstractBusParser as BusParser
+from .schemas import BusService, PlaceInfo, SearchRequest
+
 
 setup_logging()
 log = logging.getLogger(__name__)

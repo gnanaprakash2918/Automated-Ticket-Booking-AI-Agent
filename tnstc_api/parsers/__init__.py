@@ -1,11 +1,11 @@
 import logging
+from utils.logging_setup import setup_logging
 from ..config import PARSER_STRATEGY
 from .base import AbstractBusParser as BusParser
 from .bs_parser import BeautifulSoupParser
 from .gemini_parser import GeminiParser
 from .ollama_parser import OllamaParser
 
-from utils.logging_setup import setup_logging
 
 setup_logging()
 log = logging.getLogger(__name__)
@@ -29,7 +29,7 @@ def get_parser() -> BusParser:
            (isinstance(_parser_instance, OllamaParser) and current_strategy == "ollama"):
             return _parser_instance
         else:
-            log.info(f"Parser strategy changed. Re-initializing parser...")
+            log.info("Parser strategy changed. Re-initializing parser...")
 
     _parser_instance = None # type: ignore
 
