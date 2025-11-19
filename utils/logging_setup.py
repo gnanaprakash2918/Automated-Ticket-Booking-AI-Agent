@@ -2,7 +2,7 @@ from datetime import datetime
 import logging
 import os
 from rich.logging import RichHandler
-from tnstc_api.config import APP_ENV, LOG_DIR
+from .root_config import APP_ENV, LOG_DIR
 
 
 def setup_logging():
