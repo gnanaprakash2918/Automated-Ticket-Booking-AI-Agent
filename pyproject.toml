@@ -17,6 +17,7 @@ fix = true
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
+ignore = ["E501"]
 
 [tool.ruff.lint.isort]
 combine-as-imports = true
