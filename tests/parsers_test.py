@@ -20,8 +20,8 @@ OUT_HTML_LOG = Path(__file__).with_name("retrieved_htmls.txt")
 
 TEST_DATE = date(2025, 12, 20).strftime("%d/%m/%Y") 
 TEST_REQUEST = SearchRequest(
-    from_place_name="DHARMAPURI",
-    to_place_name="CHENNAI-PT DR. M.G.R. BS",
+    from_place_name="SALEM",
+    to_place_name="MADURAI",
     onward_date=TEST_DATE
 )
 
