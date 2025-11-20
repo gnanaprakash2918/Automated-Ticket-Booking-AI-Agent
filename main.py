@@ -132,12 +132,8 @@ def create_app(service_name: str = "tnstc"):
                     f"To={getattr(to_place, 'code', None)}"
                 )
 
-            services = await service_instance.search_services(req)
-            logger.info(f"Service returned {len(services)} services before limit.")
-
-            if limit and services:
-                logger.debug(f"Applying limit={limit} to services list.")
-                services = services[:limit]
+            services = await service_instance.search_services(req, limit=limit)
+            logger.info(f"Service returned {len(services)} services.")
 
             if not services:
                 logger.warning("No bus services found for given criteria.")

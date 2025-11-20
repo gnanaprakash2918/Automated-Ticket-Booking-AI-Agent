@@ -11,7 +11,7 @@ from datetime import date
 TEST_SERVICE = "tnstc"
 
 # Test parameters
-LIMIT_BUSES = 3
+LIMIT_BUSES = 5
 TEST_DATE = date(2025, 12, 20).strftime("%d/%m/%Y")
 
 # Service-specific test data

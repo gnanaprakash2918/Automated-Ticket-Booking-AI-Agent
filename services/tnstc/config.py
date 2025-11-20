@@ -1,5 +1,5 @@
 import os
-from typing import Literal, Optional
+from typing import Literal, Optional, cast
 from dotenv import load_dotenv
 
 
@@ -17,7 +17,9 @@ TNSTC_BASE_URL: str = os.getenv(
 TNSTC_DETAILS_URL: str = "https://www.tnstc.in/OTRSOnline/advanceNewBooking.do"
 
 ParserStrategy = Literal["beautifulsoup", "gemini", "ollama"]
-PARSER_STRATEGY: ParserStrategy = os.getenv("PARSER_STRATEGY", "beautifulsoup")  # type: ignore
+PARSER_STRATEGY: ParserStrategy = cast(
+    ParserStrategy, os.getenv("PARSER_STRATEGY", "beautifulsoup")
+)
 
 GEMINI_API_KEY: Optional[str] = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-preview-09-2025")

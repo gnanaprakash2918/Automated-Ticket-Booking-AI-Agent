@@ -37,6 +37,55 @@ class BeautifulSoupParser(AbstractBusParser):
         )
         return [str(div) for div in bus_divs]
 
+    def extract_bus_metadata(
+        self, bus_html: str, idx: int
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Extract basic metadata from bus HTML without expensive detail fetching.
+        Used for smart pre-filtering before LLM parsing to reduce costs.
+
+        Args:
+            bus_html: HTML string of a single bus div.
+            idx: Index of this bus in the original list.
+
+        Returns:
+            Dict with keys: idx, price_in_rs, departure_time, bus_type, html
+            Returns None if bus div cannot be parsed.
+        """
+        soup = BeautifulSoup(bus_html, "lxml")
+        bus_div = soup.find("div", class_="bus-list")
+
+        if not bus_div:
+            log.warning(f"Bus {idx}: No bus-list div found in HTML snippet")
+            return None
+
+        # Extract price
+        price = 0
+        price_div = bus_div.find("div", class_="price")
+        if price_div:
+            match = re.search(r"(\d+)", price_div.get_text(strip=True))
+            if match:
+                price = int(match.group(1))
+
+        # Extract departure time
+        departure_time = "N/A"
+        time_divs = bus_div.find_all("div", class_="time-info")
+        if len(time_divs) > 0:
+            span = time_divs[0].find("span")
+            if span:
+                departure_time = span.get_text(strip=True)
+
+        # Extract bus type
+        bus_type = str(bus_div.get("data-bus-type", "N/A")).strip()
+
+        return {
+            "idx": idx,
+            "price_in_rs": price,
+            "departure_time": departure_time,
+            "bus_type": bus_type,
+            "html": bus_html,
+        }
+
     async def parse_buses(
         self,
         client: httpx.AsyncClient,

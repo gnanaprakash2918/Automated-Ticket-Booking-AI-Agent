@@ -1,6 +1,6 @@
 import os
 import re
-from typing import List
+from typing import Any, Dict, List, Optional
 import httpx
 from loguru import logger
 from database.db import MigrationManager, get_place_from_cache, save_place_to_cache
@@ -257,12 +257,95 @@ class TNSTCService(BaseService):
         )
         return filtered_services
 
+    def _pre_filter_buses(
+        self, bus_metadata_list: List[Dict[str, Any]], request: TNSTCSearchRequest
+    ) -> List[Dict[str, Any]]:
+        """
+        Pre-filter buses based on price, time, and bus type criteria.
+        This happens BEFORE expensive parsing to reduce LLM costs.
+
+        Args:
+            bus_metadata_list: List of bus metadata dicts from extract_bus_metadata.
+            request: The search request with filter criteria.
+
+        Returns:
+            Filtered list of bus metadata dicts.
+        """
+        min_price = request.min_price_in_rs if request.min_price_in_rs is not None else 0
+        max_price = (
+            request.max_price_in_rs
+            if request.max_price_in_rs is not None
+            else float("inf")
+        )
+        min_dep_time = request.min_departure_time or "00:00"
+        max_dep_time = request.max_departure_time or "23:59"
+        allowed_types = (
+            {t.lower() for t in request.allowed_bus_types}
+            if request.allowed_bus_types
+            else None
+        )
+
+        # Convert times to int for comparison
+        min_dep_int = int(min_dep_time.replace(":", ""))
+        max_dep_int = int(max_dep_time.replace(":", ""))
+
+        filtered = []
+        filtered_out_count = 0
+
+        for metadata in bus_metadata_list:
+            # Price filter
+            if not (min_price <= metadata["price_in_rs"] <= max_price):
+                filtered_out_count += 1
+                logger.debug(
+                    f"Pre-filter: Bus {metadata['idx']} excluded by price: "
+                    f"{metadata['price_in_rs']} not in [{min_price}, {max_price}]"
+                )
+                continue
+
+            # Time filter
+            dep_time = metadata["departure_time"]
+            if re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", dep_time):
+                dep_int = int(dep_time.replace(":", ""))
+                if not (min_dep_int <= dep_int <= max_dep_int):
+                    filtered_out_count += 1
+                    logger.debug(
+                        f"Pre-filter: Bus {metadata['idx']} excluded by time: "
+                        f"{dep_time} not in [{min_dep_time}, {max_dep_time}]"
+                    )
+                    continue
+
+            # Bus type filter
+            if allowed_types and metadata["bus_type"].lower() not in allowed_types:
+                filtered_out_count += 1
+                logger.debug(
+                    f"Pre-filter: Bus {metadata['idx']} excluded by bus_type: "
+                    f"'{metadata['bus_type']}' not in {allowed_types}"
+                )
+                continue
+
+            filtered.append(metadata)
+
+        logger.info(
+            f"TNSTC Pre-filter: {len(bus_metadata_list)} buses → "
+            f"{len(filtered)} passed filters ({filtered_out_count} excluded)"
+        )
+
+        return filtered
+
     async def search_services(
-        self, request: TNSTCSearchRequest
+        self, request: TNSTCSearchRequest, limit: Optional[int] = None
     ) -> List[TNSTCBusService]:
         """
-        Orchestrates the full search flow:
-        Place Resolution -> HTTP Request -> Parsing -> Filtering.
+        Orchestrates the full search flow with smart pre-filtering:
+        Place Resolution -> HTTP Request -> Pre-filtering -> Limited Parsing -> Validation.
+
+        Args:
+            request: The search request with origin, destination, date, and filter criteria.
+            limit: Optional maximum number of buses to parse (reduces LLM costs).
+                   Applied AFTER pre-filtering based on price/time/bus_type.
+
+        Returns:
+            List of TNSTCBusService objects that match all criteria.
         """
 
         logger.info(
@@ -324,39 +407,72 @@ class TNSTCService(BaseService):
                     f"length={len(response.text)}"
                 )
 
-                # STEP 1: Always use BeautifulSoupParser for pre-filtering
+                # STEP 1: Always use BeautifulSoupParser for bus extraction
                 bs_parser = BeautifulSoupParser()
                 parser: AbstractBusParser = get_parser()
 
                 try:
                     logger.info(
-                        "TNSTC: Using BeautifulSoupParser for bus pre-filtering..."
+                        "TNSTC: Extracting bus HTMLs with BeautifulSoupParser..."
                     )
                     bus_html_list = bs_parser.extract_bus_htmls(response.text)
                     logger.info(
-                        f"TNSTC: BeautifulSoupParser identified {len(bus_html_list)} buses"
+                        f"TNSTC: BeautifulSoupParser extracted {len(bus_html_list)} buses"
                     )
 
                     if not bus_html_list:
                         logger.warning(
-                            "TNSTC: No buses found by BeautifulSoupParser pre-filtering"
+                            "TNSTC: No buses found by BeautifulSoupParser"
                         )
                         return []
 
-                    # STEP 2: Determine parsing strategy
+                    # STEP 2: Extract metadata for smart pre-filtering
+                    logger.info("TNSTC: Extracting metadata for smart pre-filtering...")
+                    bus_metadata_list = []
+                    for idx, bus_html in enumerate(bus_html_list):
+                        metadata = bs_parser.extract_bus_metadata(bus_html, idx)
+                        if metadata:
+                            bus_metadata_list.append(metadata)
+
+                    # STEP 3: Pre-filter based on criteria (BEFORE expensive parsing)
+                    filtered_metadata = self._pre_filter_buses(
+                        bus_metadata_list, request
+                    )
+
+                    if not filtered_metadata:
+                        logger.warning(
+                            "TNSTC: No buses passed pre-filtering criteria"
+                        )
+                        return []
+
+                    # STEP 4: Apply limit to reduce LLM costs
+                    if limit and len(filtered_metadata) > limit:
+                        logger.info(
+                            f"TNSTC: Applying limit {limit} to {len(filtered_metadata)} pre-filtered buses"
+                        )
+                        filtered_metadata = filtered_metadata[:limit]
+
+                    # STEP 5: Extract just the HTML for parsing
+                    filtered_bus_htmls = [m["html"] for m in filtered_metadata]
+                    logger.info(
+                        f"TNSTC: Parsing {len(filtered_bus_htmls)} buses "
+                        f"(after pre-filtering + limit)"
+                    )
+
+                    # STEP 6: Determine parsing strategy
                     if isinstance(parser, BeautifulSoupParser):
                         # Use BS results directly
-                        logger.info("TNSTC: Using BeautifulSoupParser results directly")
+                        logger.info("TNSTC: Using BeautifulSoupParser for full parsing")
                         raw_services = await bs_parser.parse_buses(
-                            client, bus_html_list
+                            client, filtered_bus_htmls
                         )
                     else:
-                        # LLM strategy: pass filtered bus HTMLs
+                        # LLM strategy: pass pre-filtered bus HTMLs
                         logger.info(
-                            f"TNSTC: Passing {len(bus_html_list)} filtered bus HTMLs to "
+                            f"TNSTC: Passing {len(filtered_bus_htmls)} pre-filtered buses to "
                             f"{parser.__class__.__name__}"
                         )
-                        raw_services = await parser.parse_buses(client, bus_html_list)
+                        raw_services = await parser.parse_buses(client, filtered_bus_htmls)
 
                 except Exception as e:
                     # STEP 3: Fallback - let LLM parse everything
