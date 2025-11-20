@@ -1,10 +1,9 @@
-import asyncio
 from datetime import datetime
 import importlib
 from typing import Any, Optional
 from fastapi import Body, FastAPI, HTTPException, Query, status
-from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from loguru import logger
 from pydantic import ValidationError
 import uvicorn
@@ -94,8 +93,8 @@ def create_app(service_name: str = "tnstc"):
             return {"places": places}
         else:
             raise HTTPException(
-                status.HTTP_501_NOT_IMPLEMENTED, 
-                "Place search not implemented for this service"
+                status.HTTP_501_NOT_IMPLEMENTED,
+                "Place search not implemented for this service",
             )
 
     @app.post("/search", response_model=ResponseSchema)
@@ -159,7 +158,7 @@ def create_app(service_name: str = "tnstc"):
                     "code": "UNK",
                     "name": req.from_place_name,
                 }
-            
+
             if to_place is None:
                 to_place = {
                     "id": "000",
@@ -182,17 +181,21 @@ def create_app(service_name: str = "tnstc"):
             # Handle AmbiguousPlaceError dynamically
             if AmbiguousPlaceError and isinstance(e, AmbiguousPlaceError):
                 logger.warning(f"Ambiguous place error: {e}")
+                candidates = getattr(e, "candidates", []) or []
+                serialized_candidates = [
+                    getattr(c, "model_dump", lambda: c)() for c in candidates
+                ]
                 return JSONResponse(
                     status_code=status.HTTP_300_MULTIPLE_CHOICES,
                     content={
                         "message": str(e),
-                        "candidates": [c.model_dump() for c in e.candidates]
-                    }
+                        "candidates": serialized_candidates,
+                    },
                 )
-            
+
             if isinstance(e, HTTPException):
                 raise e
-                
+
             logger.exception("Unhandled error in search endpoint")
             raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, str(e))
 
