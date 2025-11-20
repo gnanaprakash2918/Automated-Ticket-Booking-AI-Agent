@@ -246,6 +246,10 @@ class TNSTCService(BaseService):
 
                 continue
 
+        # Assign sequential bus numbers to filtered results
+        for idx, service in enumerate(filtered_services, start=1):
+            service.bus_number = idx
+
         logger.info(
             f"TNSTC: Filtering complete. {len(bus_list)} -> "
             f"{len(filtered_services)} services after filters."

@@ -44,6 +44,10 @@ class TNSTCPlaceInfo(BaseModel):
 class TNSTCBusService(BaseModel):
     """Output model representing a single available bus service and its details."""
 
+    bus_number: Optional[int] = Field(
+        default=None,
+        description='Sequential number assigned to this bus in the filtered results for easy reference. (e.g., 1, 2, 3...)',
+    )
     operator: str = Field(
         default=...,
         description='Name of the operating corporation. (e.g., "SALEM", "TNSTC-VILLUPURAM")',
@@ -96,6 +100,7 @@ class TNSTCBusService(BaseModel):
         "json_schema_extra": {
             "examples": [
                 {
+                    "bus_number": 1,
                     "operator": "SALEM",
                     "bus_type": "AC 3X2",
                     "trip_code": "2215DHACHEDD02A",
@@ -311,6 +316,7 @@ class TNSTCBusSearchResponse(BaseModel):
                     },
                     "services": [
                         {
+                            "bus_number": 1,
                             "operator": "SALEM",
                             "bus_type": "AC 3X2",
                             "trip_code": "2215DHACHEDD02A",
