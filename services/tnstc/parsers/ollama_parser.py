@@ -136,6 +136,110 @@ class OllamaParser(AbstractBusParser):
             finally:
                 logger.debug(f"OllamaParser: [SEMAPHORE RELEASED] Bus {idx}.")
 
+    async def parse_buses(
+        self,
+        client: httpx.AsyncClient,
+        bus_html_list: List[str],
+        limit: Optional[int] = None,
+    ) -> List[TNSTCBusService]:
+        """
+        Parse pre-filtered bus HTML snippets (hybrid parsing strategy).
+
+        This is more efficient than parse() as bus discovery is already done
+        by BeautifulSoupParser, reducing redundant HTML processing.
+
+        Args:
+            client: AsyncClient for sub-requests.
+            bus_html_list: List of HTML strings, each containing a single bus div.
+            limit: Optional limit on number of buses to parse.
+
+        Returns:
+            List of parsed TNSTCBusService objects.
+        """
+        logger.info(
+            f"OllamaParser.parse_buses: Processing {len(bus_html_list)} "
+            f"pre-filtered bus HTML snippets"
+        )
+
+        semaphore = asyncio.Semaphore(OLLAMA_CONCURRENCY_LIMIT)
+
+        # Each HTML snippet is already a single bus div
+        all_details_html = []
+        for idx, bus_html in enumerate(bus_html_list):
+            soup = BeautifulSoup(bus_html, "lxml")
+            bus_div = soup.find("div", class_="bus-list")
+
+            if not bus_div:
+                logger.warning(
+                    f"OllamaParser Bus {idx}: No bus-list div found in snippet"
+                )
+                all_details_html.append("")
+                continue
+
+            a_tag = bus_div.find(
+                "a", attrs={"data-target": "#TripcodePopUp", "onclick": True}
+            )
+            onclick_attr = a_tag.get("onclick", "") if a_tag else ""
+
+            if onclick_attr:
+                logger.debug(f"Bus {idx}: Fetching trip details...")
+                detail_html = await self._call_load_trip_details(
+                    client, str(onclick_attr), idx
+                )
+                logger.debug(
+                    f"Bus {idx}: Details loaded (length={len(detail_html)} chars)"
+                )
+                all_details_html.append(detail_html)
+            else:
+                logger.warning(f"Bus {idx}: No onclick attribute found")
+                all_details_html.append("")
+
+        # Parse with LLM
+        parsing_tasks = []
+        for idx, bus_html in enumerate(bus_html_list):
+            main_clean = minify_html(bus_html)
+            detail_clean = minify_html(all_details_html[idx])
+
+            logger.debug(
+                f"OllamaParser: Enqueuing bus {idx} for LLM parsing "
+                f"(main_len={len(main_clean)}, detail_len={len(detail_clean)})"
+            )
+
+            parsing_tasks.append(
+                self._wrapper_parse_chunk(semaphore, main_clean, detail_clean, idx)
+            )
+
+        logger.info(
+            f"OllamaParser: Queued {len(parsing_tasks)} tasks. Processing..."
+        )
+        results = await asyncio.gather(*parsing_tasks, return_exceptions=True)
+
+        bus_services = []
+        for idx, res in enumerate(results):
+            if isinstance(res, TNSTCBusService):
+                logger.debug(f"Bus {idx}: Parsed successfully into TNSTCBusService.")
+                bus_services.append(res)
+            elif isinstance(res, Exception):
+                logger.error(f"Bus {idx}: Final parsing error: {res}")
+            else:
+                logger.error(
+                    f"Bus {idx}: Unexpected result type from parsing: {type(res)}"
+                )
+
+        logger.info(
+            f"OllamaParser.parse_buses: Completed. "
+            f"{len(bus_services)}/{len(bus_html_list)} parsed successfully."
+        )
+
+        # Apply limit
+        if limit is not None and len(bus_services) > limit:
+            logger.info(
+                f"OllamaParser: Applying limit of {limit} to {len(bus_services)} parsed buses."
+            )
+            bus_services = bus_services[:limit]
+
+        return bus_services
+
     async def parse(
         self, client: httpx.AsyncClient, html_content: str, limit: Optional[int] = None
     ) -> List[TNSTCBusService]:

@@ -8,6 +8,7 @@ from ..base.service import BaseService
 from .config import TNSTC_BASE_URL
 from .parsers import get_parser
 from .parsers.base import AbstractBusParser
+from .parsers.bs_parser import BeautifulSoupParser
 from .schemas import TNSTCBusService, TNSTCPlaceInfo, TNSTCSearchRequest
 
 
@@ -323,15 +324,60 @@ class TNSTCService(BaseService):
                     f"length={len(response.text)}"
                 )
 
-                # 3. Parse Results
+                # STEP 1: Always use BeautifulSoupParser for pre-filtering
+                bs_parser = BeautifulSoupParser()
                 parser: AbstractBusParser = get_parser()
-                logger.info(
-                    f"TNSTC: Parsing results using strategy: "
-                    f"{parser.__class__.__name__}"
-                )
 
-                # The parser expects the client to make sub-requests for details
-                raw_services = await parser.parse(client, response.text)
+                try:
+                    logger.info(
+                        "TNSTC: Using BeautifulSoupParser for bus pre-filtering..."
+                    )
+                    bus_html_list = bs_parser.extract_bus_htmls(response.text)
+                    logger.info(
+                        f"TNSTC: BeautifulSoupParser identified {len(bus_html_list)} buses"
+                    )
+
+                    if not bus_html_list:
+                        logger.warning(
+                            "TNSTC: No buses found by BeautifulSoupParser pre-filtering"
+                        )
+                        return []
+
+                    # STEP 2: Determine parsing strategy
+                    if isinstance(parser, BeautifulSoupParser):
+                        # Use BS results directly
+                        logger.info("TNSTC: Using BeautifulSoupParser results directly")
+                        raw_services = await bs_parser.parse_buses(
+                            client, bus_html_list
+                        )
+                    else:
+                        # LLM strategy: pass filtered bus HTMLs
+                        logger.info(
+                            f"TNSTC: Passing {len(bus_html_list)} filtered bus HTMLs to "
+                            f"{parser.__class__.__name__}"
+                        )
+                        raw_services = await parser.parse_buses(client, bus_html_list)
+
+                except Exception as e:
+                    # STEP 3: Fallback - let LLM parse everything
+                    logger.warning(
+                        f"TNSTC: BeautifulSoupParser pre-filtering failed: {e}. "
+                        f"Falling back to full HTML parsing with {parser.__class__.__name__}"
+                    )
+
+                    if isinstance(parser, BeautifulSoupParser):
+                        # BS already failed, return empty
+                        logger.error(
+                            "TNSTC: BeautifulSoupParser failed and no LLM parser available for fallback"
+                        )
+                        return []
+                    else:
+                        # Use LLM to parse full HTML
+                        logger.info(
+                            f"TNSTC: Using {parser.__class__.__name__} to parse full HTML as fallback"
+                        )
+                        raw_services = await parser.parse(client, response.text)
+
                 logger.info(f"TNSTC: Parser returned {len(raw_services)} raw services.")
 
             # 4. Filter Results

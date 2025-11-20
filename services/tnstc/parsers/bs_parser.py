@@ -17,6 +17,55 @@ class BeautifulSoupParser(AbstractBusParser):
     Implements the BusParser interface using BeautifulSoup for high-speed, selector-based HTML parsing.
     """
 
+    def extract_bus_htmls(self, html_content: str) -> List[str]:
+        """
+        Extract individual bus div HTML snippets for hybrid parsing strategy.
+
+        This method is used to pre-filter buses from the main HTML, which can then
+        be passed to LLM parsers to reduce token usage and improve performance.
+
+        Args:
+            html_content: The raw HTML string of the main search results page.
+
+        Returns:
+            List of HTML strings, one per bus div.
+        """
+        soup = BeautifulSoup(html_content, "lxml")
+        bus_divs = soup.find_all("div", class_="bus-list")
+        log.info(
+            f"BeautifulSoupParser.extract_bus_htmls: Found {len(bus_divs)} bus divs"
+        )
+        return [str(div) for div in bus_divs]
+
+    async def parse_buses(
+        self,
+        client: httpx.AsyncClient,
+        bus_html_list: List[str],
+        limit: Optional[int] = None,
+    ) -> List[TNSTCBusService]:
+        """
+        Parse individual bus HTML snippets (hybrid parsing strategy).
+
+        Reconstructs full HTML with only the provided bus divs and uses
+        the existing parse method.
+
+        Args:
+            client: AsyncClient for sub-requests.
+            bus_html_list: List of HTML strings, each containing a single bus div.
+            limit: Optional limit on number of buses to parse.
+
+        Returns:
+            List of parsed TNSTCBusService objects.
+        """
+        log.info(
+            f"BeautifulSoupParser.parse_buses: Processing {len(bus_html_list)} "
+            f"pre-filtered bus HTML snippets"
+        )
+
+        # Reconstruct HTML with only the provided bus divs
+        reconstructed_html = "\n".join(bus_html_list)
+        return await self.parse(client, reconstructed_html, limit)
+
     async def parse(
         self, client: httpx.AsyncClient, html_content: str, limit: Optional[int] = None
     ) -> List[TNSTCBusService]:

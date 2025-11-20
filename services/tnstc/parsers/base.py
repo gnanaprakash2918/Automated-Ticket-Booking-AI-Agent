@@ -67,3 +67,28 @@ class AbstractBusParser(ABC):
         Subclasses must provide a concrete implementation for this method.
         """
         raise NotImplementedError
+
+    @abstractmethod
+    async def parse_buses(
+        self,
+        client: httpx.AsyncClient,
+        bus_html_list: List[str],
+        limit: Optional[int] = None,
+    ) -> List[TNSTCBusService]:
+        """
+        Parse a list of individual bus HTML snippets (hybrid parsing strategy).
+
+        This method is used when BeautifulSoupParser has already identified and
+        extracted individual bus divs. LLM parsers can use this to process only
+        relevant HTML, reducing token usage and improving performance.
+
+        Args:
+            client: An httpx.AsyncClient for making any necessary sub-requests
+                    (e.g., to get trip details).
+            bus_html_list: List of HTML strings, each containing a single bus div.
+            limit: If provided, limit the number of buses to parse.
+
+        Returns:
+            A list of TNSTCBusService objects.
+        """
+        raise NotImplementedError
