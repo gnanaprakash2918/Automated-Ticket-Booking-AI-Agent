@@ -3,7 +3,12 @@ import re
 from typing import Any, Dict, List, Optional
 import httpx
 from loguru import logger
-from database.db import MigrationManager, get_place_from_cache, save_place_to_cache
+from database.db import (
+    MigrationManager,
+    get_place_from_cache,
+    save_place_to_cache,
+    search_places_in_cache,
+)
 from ..base.service import BaseService
 from .config import TNSTC_BASE_URL
 from .parsers import get_parser
@@ -507,3 +512,27 @@ class TNSTCService(BaseService):
         except Exception as e:
             logger.error(f"TNSTC Service Search Failed: {e}", exc_info=True)
             return []
+
+    async def search_places(self, query: str) -> List[TNSTCPlaceInfo]:
+        """
+        Searches for places matching the query string.
+        First checks the local cache, then (optionally) could query the API if needed.
+        For now, we rely on the cache and what we've learned from previous lookups.
+        """
+        logger.info(f"TNSTC: Searching for places matching '{query}'")
+
+        # 1. Search in Cache
+        cached_results = await search_places_in_cache("TNSTC", query)
+
+        places = []
+        for res in cached_results:
+            places.append(
+                TNSTCPlaceInfo(
+                    id=res["place_id"],
+                    code=res["place_code"],
+                    name=res["place_name"],
+                )
+            )
+
+        logger.info(f"TNSTC: Found {len(places)} matches in cache for '{query}'")
+        return places

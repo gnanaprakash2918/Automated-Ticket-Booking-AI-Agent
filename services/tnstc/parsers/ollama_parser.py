@@ -5,7 +5,6 @@ import httpx
 from loguru import logger
 from tenacity import Retrying, stop_after_attempt, wait_exponential
 from llm.interface import LLMInterface
-from llm.ollama import OllamaLLM
 from utils.helpers import minify_html
 from ..config import OLLAMA_CONCURRENCY_LIMIT
 from ..schemas import TNSTCBusService
@@ -20,8 +19,14 @@ class OllamaParser(AbstractBusParser):
 
     def __init__(self):
         try:
-            logger.info("Initializing OllamaParser with OllamaLLM...")
-            self.llm: LLMInterface = OllamaLLM(prompt_dir="services/tnstc/prompts")
+            logger.info("Initializing OllamaParser with LLMFactory...")
+            from llm.factory import LLMFactory
+            
+            # Use factory to get the configured LLM
+            self.llm: LLMInterface = LLMFactory.create_llm(
+                provider="ollama", 
+                prompt_dir="services/tnstc/prompts"
+            )
 
             self.system_prompt = self.llm.construct_system_prompt(
                 schema=TNSTCBusService, filename="system_prompt.txt"

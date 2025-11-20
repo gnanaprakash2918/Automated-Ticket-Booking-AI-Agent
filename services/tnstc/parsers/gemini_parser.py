@@ -4,7 +4,6 @@ from bs4 import BeautifulSoup
 import httpx
 from loguru import logger
 from tenacity import Retrying, stop_after_attempt, wait_exponential
-from llm.gemini import GeminiLLM
 from llm.interface import LLMInterface
 from utils.helpers import minify_html
 from ..config import GEMINI_CONCURRENCY_LIMIT, GEMINI_RATE_LIMIT_DELAY
@@ -20,8 +19,14 @@ class GeminiParser(AbstractBusParser):
 
     def __init__(self):
         try:
-            logger.info("Initializing GeminiParser with GeminiLLM...")
-            self.llm: LLMInterface = GeminiLLM(prompt_dir="services/tnstc/prompts")
+            logger.info("Initializing GeminiParser with LLMFactory...")
+            from llm.factory import LLMFactory
+            
+            # Use factory to get the configured LLM (defaults to Gemini if not set)
+            self.llm: LLMInterface = LLMFactory.create_llm(
+                provider="gemini", 
+                prompt_dir="services/tnstc/prompts"
+            )
 
             self.system_prompt = self.llm.construct_system_prompt(
                 schema=TNSTCBusService, filename="system_prompt.txt"
