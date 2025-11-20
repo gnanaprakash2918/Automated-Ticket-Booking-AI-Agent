@@ -161,10 +161,6 @@ class OllamaParser(AbstractBusParser):
             logger.warning("OllamaParser: No 'div.bus-list' elements found.")
             return []
 
-        if limit:
-            logger.info(f"OllamaParser: Applying limit of {limit} buses.")
-            bus_divs = bus_divs[:limit]
-
         all_details_html = []
         logger.info(f"OllamaParser: Fetching details for {len(bus_divs)} buses...")
 
@@ -226,5 +222,10 @@ class OllamaParser(AbstractBusParser):
         logger.info(
             f"OllamaParser: Completed. {len(bus_services)}/{len(bus_divs)} parsed successfully."
         )
+
+        # Apply limit AFTER parsing all buses to avoid missing potential matches
+        if limit is not None and len(bus_services) > limit:
+            logger.info(f"OllamaParser: Applying limit of {limit} to {len(bus_services)} parsed buses.")
+            bus_services = bus_services[:limit]
 
         return bus_services

@@ -33,10 +33,6 @@ class BeautifulSoupParser(AbstractBusParser):
             f"BeautifulSoupParser: Starting hybrid parse. Found {len(bus_divs)} bus elements."
         )
 
-        if limit is not None:
-            log.info(f"BeautifulSoupParser: Applying limit of {limit} buses.")
-            bus_divs = bus_divs[:limit]
-
         # Scrape main list and prepare for sequential detail fetch
         for idx, bus_div in enumerate(bus_divs):
             try:
@@ -179,6 +175,13 @@ class BeautifulSoupParser(AbstractBusParser):
             except Exception as e:
                 log.error(f"Critical error in bs_parser (Pass 2) for bus {idx}: {e}")
                 continue
+
+        # Apply limit AFTER parsing all buses to avoid missing potential matches
+        if limit is not None and len(bus_services) > limit:
+            log.info(
+                f"BeautifulSoupParser: Applying limit of {limit} to {len(bus_services)} parsed buses."
+            )
+            bus_services = bus_services[:limit]
 
         return bus_services
 
@@ -366,7 +369,8 @@ class BeautifulSoupParser(AbstractBusParser):
         try:
             fare_pattern = re.compile(pattern_str, re.IGNORECASE)
             fare_label = details_soup.find(
-                "strong", string=fare_pattern
+                "strong",
+                string=fare_pattern,  # type: ignore
             ) or details_soup.find("div", string=fare_pattern)  # type: ignore
             if not fare_label:
                 return None

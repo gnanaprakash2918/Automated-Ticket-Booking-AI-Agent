@@ -7,6 +7,7 @@ from tenacity import Retrying, stop_after_attempt, wait_exponential
 from llm.gemini import GeminiLLM
 from llm.interface import LLMInterface
 from utils.helpers import minify_html
+from ..config import GEMINI_CONCURRENCY_LIMIT
 from ..schemas import TNSTCBusService
 from .base import AbstractBusParser
 
@@ -31,7 +32,9 @@ class GeminiParser(AbstractBusParser):
             )
 
             self.total_requests = 0
-            logger.info("GeminiParser initialization completed successfully.")
+            logger.info(
+                f"GeminiParser initialized successfully. Concurrency limit: {GEMINI_CONCURRENCY_LIMIT}"
+            )
 
         except Exception as e:
             logger.error(f"Failed to initialize Gemini LLM Adapter: {e}")
@@ -100,14 +103,50 @@ class GeminiParser(AbstractBusParser):
                     )
                     raise
 
+    async def _wrapper_parse_chunk(
+        self,
+        semaphore: asyncio.Semaphore,
+        main_list_html: str,
+        detail_table_html: str,
+        idx: int,
+    ) -> Optional[TNSTCBusService]:
+        """
+        Wrapper to strictly limit concurrent Gemini requests using a Semaphore.
+        Prevents hitting Gemini API rate limits.
+        """
+
+        async with semaphore:
+            logger.debug(
+                f"GeminiParser: [SEMAPHORE ACQUIRED] Bus {idx}. "
+                f"Active slots: {GEMINI_CONCURRENCY_LIMIT - semaphore._value}"
+            )
+
+            try:
+                result = await self._parse_bus_with_llm(
+                    main_list_html, detail_table_html, idx
+                )
+
+                logger.debug(
+                    f"GeminiParser: Bus {idx} parsing completed under semaphore."
+                )
+
+                return result
+            finally:
+                logger.debug(f"GeminiParser: [SEMAPHORE RELEASED] Bus {idx}.")
+
     async def parse(
         self, client: httpx.AsyncClient, html_content: str, limit: Optional[int] = None
     ) -> List[TNSTCBusService]:
         """
-        Orchestration: Finds divs, fetches details, parses concurrently.
+        Orchestration: Finds divs, fetches details, parses concurrently (throttled).
         """
 
-        logger.info("Using GeminiParser (Interface Loader strategy)...")
+        logger.info(
+            f"Using GeminiParser (Interface Loader strategy). "
+            f"Concurrency Limit: {GEMINI_CONCURRENCY_LIMIT}"
+        )
+
+        semaphore = asyncio.Semaphore(GEMINI_CONCURRENCY_LIMIT)
 
         soup = BeautifulSoup(html_content, "lxml")
         bus_divs = soup.find_all("div", class_="bus-list")
@@ -116,10 +155,6 @@ class GeminiParser(AbstractBusParser):
         if not bus_divs:
             logger.warning("GeminiParser: No 'div.bus-list' elements found.")
             return []
-
-        if limit:
-            logger.debug(f"Applying bus limit: {limit}")
-            bus_divs = bus_divs[:limit]
 
         all_details_html = []
         for idx, bus_div in enumerate(bus_divs):
@@ -152,12 +187,12 @@ class GeminiParser(AbstractBusParser):
             detail_clean = minify_html(all_details_html[idx])
 
             logger.debug(
-                f"Bus {idx}: Enqueuing LLM parsing task "
+                f"GeminiParser: Enqueuing bus {idx} for LLM parsing "
                 f"(main_len={len(main_clean)}, detail_len={len(detail_clean)})"
             )
 
             parsing_tasks.append(
-                self._parse_bus_with_llm(main_clean, detail_clean, idx)
+                self._wrapper_parse_chunk(semaphore, main_clean, detail_clean, idx)
             )
 
         logger.info(
@@ -179,8 +214,12 @@ class GeminiParser(AbstractBusParser):
                 )
 
         logger.info(
-            f"GeminiParser: Successfully parsed {len(bus_services)} buses "
-            f"out of {len(bus_divs)}."
+            f"GeminiParser: Completed. {len(bus_services)}/{len(bus_divs)} parsed successfully."
         )
+
+        # Apply limit AFTER parsing all buses to avoid missing potential matches
+        if limit is not None and len(bus_services) > limit:
+            logger.info(f"GeminiParser: Applying limit of {limit} to {len(bus_services)} parsed buses.")
+            bus_services = bus_services[:limit]
 
         return bus_services
