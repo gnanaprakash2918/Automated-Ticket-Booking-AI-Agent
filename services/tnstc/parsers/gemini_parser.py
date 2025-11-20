@@ -1,19 +1,14 @@
 import asyncio
-import logging
 from typing import List, Optional
 from bs4 import BeautifulSoup
 import httpx
+from loguru import logger
 from tenacity import Retrying, stop_after_attempt, wait_exponential
 from llm.gemini import GeminiLLM
 from llm.interface import LLMInterface
 from utils.helpers import minify_html
-from utils.logger import setup_logging
 from ..schemas import TNSTCBusService
 from .base import AbstractBusParser
-
-
-setup_logging()
-log = logging.getLogger(__name__)
 
 
 class GeminiParser(AbstractBusParser):
@@ -24,16 +19,22 @@ class GeminiParser(AbstractBusParser):
 
     def __init__(self):
         try:
-            self.llm: LLMInterface = GeminiLLM(prompt_dir="../prompts")
+            logger.info("Initializing GeminiParser with GeminiLLM...")
+            self.llm: LLMInterface = GeminiLLM(prompt_dir="services/tnstc/prompts")
 
             self.system_prompt = self.llm.construct_system_prompt(
                 schema=TNSTCBusService, filename="system_prompt.txt"
             )
 
+            logger.debug(
+                f"System prompt loaded (length={len(self.system_prompt)} chars)"
+            )
+
             self.total_requests = 0
+            logger.info("GeminiParser initialization completed successfully.")
 
         except Exception as e:
-            log.error(f"Failed to initialize Gemini LLM Adapter: {e}")
+            logger.error(f"Failed to initialize Gemini LLM Adapter: {e}")
             raise
 
     async def _parse_bus_with_llm(
@@ -44,6 +45,11 @@ class GeminiParser(AbstractBusParser):
         Uses LLMInterface.construct_user_prompt to merge HTML into the template.
         """
 
+        logger.debug(
+            f"Bus {bus_index}: Constructing user prompt "
+            f"(main_html_len={len(main_list_html)}, detail_html_len={len(detail_table_html)})"
+        )
+
         try:
             user_prompt = self.llm.construct_user_prompt(
                 main_html=main_list_html,
@@ -51,8 +57,12 @@ class GeminiParser(AbstractBusParser):
                 filename="user_prompt.txt",
             )
 
+            logger.debug(
+                f"Bus {bus_index}: User prompt constructed (length={len(user_prompt)} chars)"
+            )
+
         except FileNotFoundError as e:
-            log.critical(f"Missing prompt file: {e}")
+            logger.critical(f"Bus {bus_index}: Missing prompt file: {e}")
             raise
 
         retry_config = Retrying(
@@ -64,8 +74,9 @@ class GeminiParser(AbstractBusParser):
         for attempt in retry_config:
             with attempt:
                 self.total_requests += 1
-                log.debug(
-                    f"Bus {bus_index}: Sending to LLM (Attempt {attempt.retry_state.attempt_number})"
+                logger.info(
+                    f"Bus {bus_index}: Sending to LLM "
+                    f"(Attempt {attempt.retry_state.attempt_number}, total_requests={self.total_requests})"
                 )
 
                 try:
@@ -75,11 +86,17 @@ class GeminiParser(AbstractBusParser):
                         system_prompt=self.system_prompt,
                     )
 
+                    logger.debug(
+                        f"Bus {bus_index}: LLM parsing succeeded on attempt "
+                        f"{attempt.retry_state.attempt_number}"
+                    )
+
                     return bus_service
 
                 except Exception as e:
-                    log.warning(
-                        f"Bus {bus_index}: Parsing failed on attempt {attempt.retry_state.attempt_number}: {e}"
+                    logger.warning(
+                        f"Bus {bus_index}: Parsing failed on attempt "
+                        f"{attempt.retry_state.attempt_number}: {e}"
                     )
                     raise
 
@@ -89,31 +106,44 @@ class GeminiParser(AbstractBusParser):
         """
         Orchestration: Finds divs, fetches details, parses concurrently.
         """
-        log.info("Using GeminiParser (Interface Loader strategy)...")
+
+        logger.info("Using GeminiParser (Interface Loader strategy)...")
 
         soup = BeautifulSoup(html_content, "lxml")
         bus_divs = soup.find_all("div", class_="bus-list")
+        logger.debug(f"Found {len(bus_divs)} 'div.bus-list' elements in HTML.")
 
         if not bus_divs:
-            log.warning("GeminiParser: No 'div.bus-list' elements found.")
+            logger.warning("GeminiParser: No 'div.bus-list' elements found.")
             return []
 
         if limit:
+            logger.debug(f"Applying bus limit: {limit}")
             bus_divs = bus_divs[:limit]
 
         all_details_html = []
         for idx, bus_div in enumerate(bus_divs):
+            logger.debug(f"Bus {idx}: Extracting onclick attribute for trip details...")
             a_tag = bus_div.find(
                 "a", attrs={"data-target": "#TripcodePopUp", "onclick": True}
             )
             onclick_attr = a_tag.get("onclick", "") if a_tag else ""
 
             if onclick_attr:
+                logger.debug(f"Bus {idx}: Found onclick attribute, fetching details...")
                 detail_html = await self._call_load_trip_details(
                     client, str(onclick_attr), idx
                 )
+
+                logger.debug(
+                    f"Bus {idx}: Loaded details HTML (length={len(detail_html)} chars)"
+                )
+
                 all_details_html.append(detail_html)
             else:
+                logger.warning(
+                    f"Bus {idx}: No onclick attribute found; skipping details."
+                )
                 all_details_html.append("")
 
         parsing_tasks = []
@@ -121,20 +151,36 @@ class GeminiParser(AbstractBusParser):
             main_clean = minify_html(str(bus_div))
             detail_clean = minify_html(all_details_html[idx])
 
+            logger.debug(
+                f"Bus {idx}: Enqueuing LLM parsing task "
+                f"(main_len={len(main_clean)}, detail_len={len(detail_clean)})"
+            )
+
             parsing_tasks.append(
                 self._parse_bus_with_llm(main_clean, detail_clean, idx)
             )
 
-        log.info(
+        logger.info(
             f"GeminiParser: Awaiting LLM results for {len(parsing_tasks)} buses..."
         )
+
         results = await asyncio.gather(*parsing_tasks, return_exceptions=True)
 
         bus_services = []
-        for res in results:
+        for idx, res in enumerate(results):
             if isinstance(res, TNSTCBusService):
+                logger.debug(f"Bus {idx}: Parsed successfully into TNSTCBusService.")
                 bus_services.append(res)
             elif isinstance(res, Exception):
-                log.error(f"Parsing Error: {res}")
+                logger.error(f"Bus {idx}: Parsing Error: {res}")
+            else:
+                logger.error(
+                    f"Bus {idx}: Unexpected result type from parsing: {type(res)}"
+                )
+
+        logger.info(
+            f"GeminiParser: Successfully parsed {len(bus_services)} buses "
+            f"out of {len(bus_divs)}."
+        )
 
         return bus_services
