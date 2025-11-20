@@ -1,7 +1,7 @@
+from datetime import datetime
 import logging
 from pathlib import Path
 import sys
-import uuid
 from loguru import logger
 from .root_config import LOG_DIR
 
@@ -21,8 +21,11 @@ def setup_logging():
 
     Path(LOG_DIR).mkdir(parents=True, exist_ok=True)
 
-    session_id = uuid.uuid4().hex
-    session_file = f"{LOG_DIR}/app_{session_id}.json"
+    # session_id = uuid.uuid4().hex
+    # session_file = f"{LOG_DIR}/app_{session_id}.json"
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    session_file = f"{LOG_DIR}/app_session_{timestamp}.json"
 
     logger.remove()
 
