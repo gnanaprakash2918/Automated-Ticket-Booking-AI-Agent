@@ -7,7 +7,7 @@ from tenacity import Retrying, stop_after_attempt, wait_exponential
 from llm.gemini import GeminiLLM
 from llm.interface import LLMInterface
 from utils.helpers import minify_html
-from ..config import GEMINI_CONCURRENCY_LIMIT
+from ..config import GEMINI_CONCURRENCY_LIMIT, GEMINI_RATE_LIMIT_DELAY
 from ..schemas import TNSTCBusService
 from .base import AbstractBusParser
 
@@ -93,6 +93,10 @@ class GeminiParser(AbstractBusParser):
                         f"Bus {bus_index}: LLM parsing succeeded on attempt "
                         f"{attempt.retry_state.attempt_number}"
                     )
+
+                    # Add delay to respect rate limits (10 req/min = 1 req every 6s)
+                    await asyncio.sleep(GEMINI_RATE_LIMIT_DELAY)
+                    logger.debug(f"Bus {bus_index}: Rate limit delay completed")
 
                     return bus_service
 

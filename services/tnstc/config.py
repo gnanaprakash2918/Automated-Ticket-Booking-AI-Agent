@@ -32,3 +32,6 @@ GEMINI_CONCURRENCY_LIMIT: int = int(os.getenv("GEMINI_CONCURRENCY_LIMIT", "1"))
 
 OLLAMA_LOAD_TIMEOUT: int = int(os.getenv("OLLAMA_LOAD_TIMEOUT", "400"))
 GEMINI_LOAD_TIMEOUT: int = int(os.getenv("GEMINI_LOAD_TIMEOUT", "400"))
+
+# Rate limit delay in seconds (default 6.5s for 10 requests/minute limit)
+GEMINI_RATE_LIMIT_DELAY: float = float(os.getenv("GEMINI_RATE_LIMIT_DELAY", "8"))
