@@ -134,6 +134,9 @@ class MigrationManager:
 async def get_place_from_cache(
     service_name: str, place_name: str
 ) -> Optional[Dict[str, Any]]:
+    """
+    Retrieves a place from the service-specific cache table.
+    """
     table_name = f"{service_name.lower()}_places"
     if not DB_PATH.exists():
         return None
@@ -141,18 +144,29 @@ async def get_place_from_cache(
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         try:
+            # Case-insensitive lookup
             cursor = await db.execute(
-                f"SELECT * FROM {table_name} WHERE place_name = ?", (place_name,)
+                f"SELECT * FROM {table_name} WHERE place_name = ? COLLATE NOCASE",
+                (place_name,),
             )
             row = await cursor.fetchone()
             return dict(row) if row else None
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Cache Read Error ({service_name}): {e}")
             return None
 
 
 async def save_place_to_cache(service_name: str, data: Dict[str, Any]):
+    """
+    Saves or updates a place in the service-specific cache table.
+    """
     table_name = f"{service_name.lower()}_places"
     if not data:
+        return
+
+    # Ensure we have the required fields
+    if "place_name" not in data:
+        logger.error("Cannot cache place without 'place_name'")
         return
 
     cols = ", ".join(data.keys())
@@ -165,6 +179,32 @@ async def save_place_to_cache(service_name: str, data: Dict[str, Any]):
                 tuple(data.values()),
             )
             await db.commit()
-            logger.trace(f"Cached: {data.get('place_name')}")
+            logger.trace(f"Cached ({service_name}): {data.get('place_name')}")
         except Exception as e:
-            logger.error(f"Cache Write Failed: {e}")
+            logger.error(f"Cache Write Failed ({service_name}): {e}")
+
+
+async def search_places_in_cache(
+    service_name: str, query: str, limit: int = 10
+) -> List[Dict[str, Any]]:
+    """
+    Searches for places in the cache matching the query string (partial match).
+    """
+    table_name = f"{service_name.lower()}_places"
+    if not DB_PATH.exists():
+        return []
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        try:
+            # LIKE query for partial matches
+            search_pattern = f"%{query}%"
+            cursor = await db.execute(
+                f"SELECT * FROM {table_name} WHERE place_name LIKE ? ORDER BY place_name LIMIT ?",
+                (search_pattern, limit),
+            )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"Cache Search Failed ({service_name}): {e}")
+            return []

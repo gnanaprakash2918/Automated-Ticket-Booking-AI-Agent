@@ -1,15 +1,10 @@
 from abc import ABC, abstractmethod
-import logging
 import re
 from typing import List, Optional
 import httpx
-from utils.logger import setup_logging
+from loguru import logger
 from ..config import TNSTC_DETAILS_URL
 from ..schemas import TNSTCBusService
-
-
-setup_logging()
-log = logging.getLogger(__name__)
 
 
 class AbstractBusParser(ABC):
@@ -28,7 +23,7 @@ class AbstractBusParser(ABC):
         """
         args = re.findall(r"'([^']*)'", str(onclick_attr))
         if len(args) < 6:
-            log.error(f"Failed to parse onclick_attr: {onclick_attr}")
+            logger.error(f"Failed to parse onclick_attr: {onclick_attr}")
             return ""
 
         data = {
@@ -45,7 +40,7 @@ class AbstractBusParser(ABC):
             response.raise_for_status()
             return response.text
         except httpx.RequestError as e:
-            log.error(f"Network error calling loadTripDetails for bus {bus_index}: {e}")
+            logger.error(f"Network error calling loadTripDetails for bus {bus_index}: {e}")
             return ""
 
     @abstractmethod
