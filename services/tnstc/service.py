@@ -1,18 +1,14 @@
-import logging
+import os
 import re
 from typing import List
-from async_lru import alru_cache
 import httpx
-from utils.logger import setup_logging
+from loguru import logger
+from database.db import MigrationManager, get_place_from_cache, save_place_to_cache
 from ..base.service import BaseService
 from .config import TNSTC_BASE_URL
 from .parsers import get_parser
 from .parsers.base import AbstractBusParser
 from .schemas import TNSTCBusService, TNSTCPlaceInfo, TNSTCSearchRequest
-
-
-setup_logging()
-log = logging.getLogger(__name__)
 
 
 class TNSTCService(BaseService):
@@ -23,53 +19,137 @@ class TNSTCService(BaseService):
     def __init__(self) -> None:
         super().__init__("TNSTC")
         self.base_url: str = TNSTC_BASE_URL
+        logger.info(f"TNSTCService initialized with base_url={self.base_url}")
 
-    @staticmethod
-    @alru_cache(maxsize=128)
-    async def _fetch_place_info(place_name: str, is_from_place: bool) -> TNSTCPlaceInfo:
+    async def initialize_db(self):
+        """
+        Initialize DB using SQL-file based migrations via MigrationManager.
+        """
+
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        migration_dir = os.path.join(current_dir, "db", "migrations")
+
+        logger.info(f"Initializing TNSTC Database from: {migration_dir}")
+
+        try:
+            manager = MigrationManager(
+                service_name="tnstc",
+                migrations_dir=migration_dir,
+            )
+
+            await manager.migrate()
+            logger.info("TNSTC Database migrations completed successfully.")
+        except Exception as e:
+            logger.critical(f"Database Initialization Failed: {e}")
+            # Do not raise here to allow the app to start, but caching will fail
+
+    async def _fetch_place_info(
+        self, place_name: str, is_from_place: bool
+    ) -> TNSTCPlaceInfo:
         """
         Resolves internal TNSTC Place IDs/Codes from a string name.
-        Cached to reduce redundant network calls.
+        Uses DB-backed cache, falling back to TNSTC API.
         """
 
+        place_type = "From" if is_from_place else "To"
+        logger.info(f"TNSTC: {place_type} Place lookup for: '{place_name}'")
+
+        # 1. Check Cache
+        try:
+            cached = await get_place_from_cache("TNSTC", place_name)
+        except Exception as e:
+            cached = None
+            logger.warning(f"Place cache lookup failed for '{place_name}': {e}")
+
+        if cached:
+            logger.debug(
+                f"TNSTC Cache Hit: {place_name} -> "
+                f"ID={cached['place_id']}, Code={cached['place_code']}"
+            )
+
+            return TNSTCPlaceInfo(
+                id=cached["place_id"],
+                code=cached["place_code"],
+                name=cached["place_name"],
+            )
+
+        # 2. Fetch from API
         async with httpx.AsyncClient() as client:
             action = "LoadFromPlaceList" if is_from_place else "LoadTOPlaceList"
             match_param = "matchStartPlace" if is_from_place else "matchEndPlace"
 
             data = {"hiddenAction": action, match_param: place_name}
 
-            place_type = "From" if is_from_place else "To"
-            log.info(f"TNSTC: {place_type} Place lookup for: '{place_name}'")
+            logger.debug(
+                f"TNSTC API Place Lookup [{place_type}]: '{place_name}' "
+                f"with payload={data}"
+            )
 
             try:
-                response = await client.post(TNSTC_BASE_URL, data=data)
+                response = await client.post(self.base_url, data=data, timeout=15.0)
                 response.raise_for_status()
-            except httpx.RequestError as e:
-                raise RuntimeError(
-                    f"External API network error during place lookup: {e}"
-                )
+            except Exception as e:
+                logger.error(f"TNSTC API Error during place lookup '{place_name}': {e}")
+                raise RuntimeError("Failed to connect to TNSTC") from e
 
             raw_response = response.text.strip()
+            logger.debug(
+                f"TNSTC raw place lookup response length={len(raw_response)} "
+                f"for '{place_name}'"
+            )
 
-            # TNSTC returns data separated by '^'
+            if not raw_response:
+                logger.error(f"TNSTC returned empty place response for '{place_name}'")
+                raise ValueError(f"Place not found: {place_name}")
+
+            # TNSTC returns data separated by '^', format typically: ID:CODE:NAME
             place_list = [item for item in raw_response.split("^") if item]
 
             if not place_list:
+                logger.error(
+                    f"TNSTC: Could not find exact place match for: {place_name}. "
+                    f"Raw response: '{raw_response}'"
+                )
+
                 raise ValueError(f"Could not find exact place match for: {place_name}.")
 
-            # Format is usually: ID:CODE:NAME
             first_match = place_list[0]
             parts = first_match.split(":")
 
             if len(parts) < 3:
+                logger.error(
+                    f"TNSTC: Invalid place format for '{place_name}': '{first_match}'"
+                )
+
                 raise ValueError(
                     f"External API returned invalid place format: {first_match}"
                 )
 
-            log.info(
-                f"TNSTC: Resolved '{place_name}' -> ID={parts[0]}, Code={parts[1]}"
+            place = TNSTCPlaceInfo(id=parts[0], code=parts[1], name=parts[2])
+
+            logger.info(
+                f"TNSTC: Resolved '{place_name}' -> ID={place.id}, Code={place.code}"
             )
-            return TNSTCPlaceInfo(id=parts[0], code=parts[1], name=parts[2])
+
+            # 3. Save to Cache
+            try:
+                await save_place_to_cache(
+                    "TNSTC",
+                    {
+                        "place_name": place.name,
+                        "place_code": place.code,
+                        "place_id": place.id,
+                    },
+                )
+
+                logger.debug(f"TNSTC: Cached place '{place_name}' successfully.")
+            except Exception as e:
+                logger.warning(
+                    f"Failed to cache place '{place_name}' "
+                    f"(ID={place.id}, Code={place.code}): {e}"
+                )
+
+            return place
 
     def _filter_bus_services(
         self, bus_list: List[TNSTCBusService], request: TNSTCSearchRequest
@@ -77,6 +157,12 @@ class TNSTCService(BaseService):
         """
         Applies filtering logic (Price, Time, Bus Type) to parsed results.
         """
+
+        logger.info(
+            "TNSTC: Starting filtering for bus services. "
+            f"Total before filter: {len(bus_list)}"
+        )
+
         filtered_services: List[TNSTCBusService] = []
 
         # Defaults
@@ -85,10 +171,18 @@ class TNSTCService(BaseService):
         min_price = (
             request.min_price_in_rs if request.min_price_in_rs is not None else 0.0
         )
+
         max_price = (
             request.max_price_in_rs
             if request.max_price_in_rs is not None
             else float("inf")
+        )
+
+        logger.debug(
+            "TNSTC: Filter criteria -> "
+            f"Price: [{min_price}, {max_price}], "
+            f"Departure: [{min_dep_str}, {max_dep_str}], "
+            f"Allowed types: {request.allowed_bus_types}"
         )
 
         # Time conversion for comparison (HH:MM -> HHMM int)
@@ -105,17 +199,30 @@ class TNSTCService(BaseService):
             try:
                 # 1. Price Filter
                 if not (min_price <= service.price_in_rs <= max_price):
+                    logger.debug(
+                        f"Filtering out {service.trip_code}: price {service.price_in_rs} "
+                        f"outside range [{min_price}, {max_price}]"
+                    )
+
                     continue
 
                 # 2. Time Validation
                 if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", service.departure_time):
-                    log.warning(
-                        f"Skipping service with invalid departure time format: {service.departure_time}"
+                    logger.warning(
+                        f"Skipping service {service.trip_code} with invalid "
+                        f"departure time format: {service.departure_time}"
                     )
+
                     continue
 
                 dep_time_int = int(service.departure_time.replace(":", ""))
                 if not (min_dep_int <= dep_time_int <= max_dep_int):
+                    logger.debug(
+                        f"Filtering out {service.trip_code}: departure "
+                        f"{service.departure_time} outside range "
+                        f"[{min_dep_str}, {max_dep_str}]"
+                    )
+
                     continue
 
                 # 3. Bus Type Filter
@@ -123,30 +230,57 @@ class TNSTCService(BaseService):
                     allowed_types_lower
                     and service.bus_type.lower() not in allowed_types_lower
                 ):
+                    logger.debug(
+                        f"Filtering out {service.trip_code}: bus_type "
+                        f"'{service.bus_type}' not in allowed {allowed_types_lower}"
+                    )
+
                     continue
 
                 filtered_services.append(service)
 
             except Exception as e:
-                log.warning(f"Error filtering service {service.trip_code}: {e}")
+                logger.warning(
+                    f"Error filtering service {getattr(service, 'trip_code', 'UNKNOWN')}: {e}"
+                )
+
                 continue
 
+        logger.info(
+            f"TNSTC: Filtering complete. {len(bus_list)} -> "
+            f"{len(filtered_services)} services after filters."
+        )
         return filtered_services
 
     async def search_services(
         self, request: TNSTCSearchRequest
     ) -> List[TNSTCBusService]:
         """
-        Orchestrates the full search flow: Place Resolution -> HTTP Request -> Parsing -> Filtering.
+        Orchestrates the full search flow:
+        Place Resolution -> HTTP Request -> Parsing -> Filtering.
         """
-        log.info(
-            f"TNSTC: Starting search request. {request.from_place_name} -> {request.to_place_name} on {request.onward_date}"
+
+        logger.info(
+            "TNSTC: Starting search request. "
+            f"{request.from_place_name} -> {request.to_place_name} "
+            f"on {request.onward_date}"
         )
 
         try:
             # 1. Resolve Places
-            from_place = await self._fetch_place_info(request.from_place_name, True)
-            to_place = await self._fetch_place_info(request.to_place_name, False)
+            from_place = await self._fetch_place_info(
+                request.from_place_name, is_from_place=True
+            )
+
+            to_place = await self._fetch_place_info(
+                request.to_place_name, is_from_place=False
+            )
+
+            logger.debug(
+                "TNSTC: Resolved places -> "
+                f"From(ID={from_place.id}, Code={from_place.code}), "
+                f"To(ID={to_place.id}, Code={to_place.code})"
+            )
 
             # 2. Construct Payload
             payload = {
@@ -169,30 +303,41 @@ class TNSTCService(BaseService):
                 "checkSingleLady": "N",
             }
 
-            async with httpx.AsyncClient(timeout=45.0) as client:
-                log.info("TNSTC: Sending Search Payload...")
+            logger.debug(
+                f"TNSTC: Constructed search payload for date={request.onward_date} "
+                f"(return={request.return_date})"
+            )
 
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                logger.info("TNSTC: Sending Search Payload to TNSTC endpoint...")
                 final_url = f"{self.base_url}?hiddenAction=SearchService"
+
                 response = await client.post(final_url, data=payload)
                 response.raise_for_status()
+                logger.debug(
+                    f"TNSTC: Search response status={response.status_code}, "
+                    f"length={len(response.text)}"
+                )
 
                 # 3. Parse Results
                 parser: AbstractBusParser = get_parser()
-                log.info(
-                    f"TNSTC: Parsing results using strategy: {parser.__class__.__name__}"
+                logger.info(
+                    f"TNSTC: Parsing results using strategy: "
+                    f"{parser.__class__.__name__}"
                 )
 
                 # The parser expects the client to make sub-requests for details
                 raw_services = await parser.parse(client, response.text)
+                logger.info(f"TNSTC: Parser returned {len(raw_services)} raw services.")
 
             # 4. Filter Results
             final_services = self._filter_bus_services(raw_services, request)
 
-            log.info(
+            logger.info(
                 f"TNSTC: Search Complete. Found {len(final_services)} valid services."
             )
             return final_services
 
         except Exception as e:
-            log.error(f"TNSTC Service Search Failed: {e}", exc_info=True)
+            logger.error(f"TNSTC Service Search Failed: {e}", exc_info=True)
             return []
