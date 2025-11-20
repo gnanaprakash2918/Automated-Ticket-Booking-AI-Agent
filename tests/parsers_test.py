@@ -218,25 +218,10 @@ async def main_test_runner():
                 TEST_REQUEST.to_place_name, is_from_place=False
             )
 
-            payload = {
-                "hiddenStartPlaceID": from_place.id,
-                "hiddenEndPlaceID": to_place.id,
-                "txtStartPlaceCode": from_place.code,
-                "txtEndPlace": to_place.code
-                if hasattr(to_place, "code")
-                else to_place.code,
-                "hiddenStartPlaceName": from_place.name,
-                "hiddenEndPlaceName": to_place.name,
-                "matchStartPlace": from_place.name,
-                "matchEndPlace": to_place.name,
-                "selectStartPlace": from_place.code,
-                "selectEndPlace": to_place.code,
-                "txtJourneyDate": TEST_REQUEST.onward_date,
-                "hiddenOnwardJourneyDate": TEST_REQUEST.onward_date,
-                "hiddenAction": "SearchService",
-                "languageType": "E",
-                "checkSingleLady": "N",
-            }
+            # Use the new helper method to construct payload
+            payload = service_instance._construct_search_payload(
+                from_place, to_place, TEST_REQUEST
+            )
 
             initial_search_url = (
                 "https://www.tnstc.in/OTRSOnline/jqreq.do?hiddenAction=SearchService"
