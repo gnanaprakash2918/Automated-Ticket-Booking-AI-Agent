@@ -24,7 +24,13 @@ def setup_logging():
     # session_id = uuid.uuid4().hex
     # session_file = f"{LOG_DIR}/app_{session_id}.json"
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    now = datetime.now()
+    timestamp = (
+        now.strftime("%Y%m%d_%I%M%S")
+        + f"{int(now.microsecond / 1000):03d}"
+        + now.strftime("%p").lower()
+    )
+
     session_file = f"{LOG_DIR}/app_session_{timestamp}.json"
 
     logger.remove()
