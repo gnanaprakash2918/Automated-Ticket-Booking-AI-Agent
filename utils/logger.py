@@ -12,7 +12,7 @@ def setup_logging():
     2. File: JSON-serialized
        - Rotates every 500MB.
        - Compresses old logs.
-       - Retains logs for 10 days.
+       - Retains logs for 50 days.
 
     3. Interception: Captures standard python logging and routes to Loguru.
     """
