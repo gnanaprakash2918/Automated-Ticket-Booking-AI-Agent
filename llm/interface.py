@@ -1,8 +1,10 @@
 from abc import ABC, abstractmethod
 import json
 import os
+import re
+import time
 from typing import Any, Type, TypeVar
-from venv import logger
+from loguru import logger
 from pydantic import BaseModel
 
 
@@ -17,7 +19,7 @@ class LLMInterface(ABC):
     2. Concrete methods for Prompt Loading.
     """
 
-    def __init__(self, prompt_dir: str = "prompts"):
+    def __init__(self, prompt_dir: str = "services/tnstc/prompts"):
         """
         Initialize the LLM with a directory to look for prompt overrides.
         """
@@ -54,6 +56,37 @@ class LLMInterface(ABC):
         raise FileNotFoundError(
             f"Prompt '{filename}' not found on disk or in defaults."
         )
+
+    def parse_json_response(self, response_text: str, schema: Type[T]) -> T:
+        """
+        Extracts JSON from text (even if wrapped in Markdown) and validates against Pydantic.
+        """
+        start_time = time.perf_counter()
+        logger.debug("Parsing JSON response...")
+
+        clean_text = (
+            re.sub(r"```[a-zA-Z]*", "", response_text).replace("```", "").strip()
+        )
+
+        match = re.search(r"(\{.*\})", clean_text, re.DOTALL)
+        if match:
+            clean_text = match.group(1)
+
+        try:
+            data = json.loads(clean_text)
+
+            parse_time = (time.perf_counter() - start_time) * 1000
+            logger.debug(f"JSON parsed successfully in {parse_time:.2f}ms")
+
+            return schema.model_validate(data)
+
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON Parsing Failed: {e}")
+            logger.trace(f"Failed Payload: {clean_text}")
+            raise RuntimeError("Invalid JSON format received from LLM")
+        except Exception as e:
+            logger.error(f"Schema Validation Failed: {e}")
+            raise RuntimeError(f"Parsed JSON did not match schema: {e}")
 
     def construct_system_prompt(
         self, schema: Type[BaseModel], filename: str = "system_prompt.txt"
