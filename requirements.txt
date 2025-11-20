@@ -16,4 +16,3 @@ langchain-ollama
 loguru
 aiosqlite
 ruff
-toon-python
