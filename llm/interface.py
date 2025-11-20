@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 import json
 import os
 from typing import Any, Type, TypeVar
+from venv import logger
 from pydantic import BaseModel
 
 
@@ -23,10 +24,16 @@ class LLMInterface(ABC):
 
         self.prompt_dir = prompt_dir
         if not os.path.exists(self.prompt_dir):
+            logger.debug(
+                f"Prompt directory '{self.prompt_dir}' does not exist. Creating it."
+            )
+
             try:
                 os.makedirs(self.prompt_dir, exist_ok=True)
+                logger.debug(f"Prompt directory '{self.prompt_dir}' created.")
             except OSError:
-                pass
+                logger.error(f"Failed to create prompt directory '{self.prompt_dir}'.")
+                raise
 
     def load_prompt(self, filename: str) -> str:
         """
@@ -35,11 +42,14 @@ class LLMInterface(ABC):
 
         file_path = os.path.join(self.prompt_dir, filename)
         if os.path.exists(file_path):
+            logger.debug(f"Loading prompt from '{file_path}'")
             try:
+                logger.debug(f"Loading prompt from '{file_path}'")
                 with open(file_path, "r", encoding="utf-8") as f:
                     return f.read()
             except Exception:
-                pass
+                logger.error(f"Failed to load prompt from '{file_path}'.")
+                raise
 
         raise FileNotFoundError(
             f"Prompt '{filename}' not found on disk or in defaults."
