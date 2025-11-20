@@ -87,7 +87,12 @@ timestamp = (
     + now.strftime("%p").lower()
 )
 
-OUT_HTML_LOG = Path(__file__).with_name(f"retrieved_htmls_{timestamp}.txt")
+
+directory = Path(__file__).parent / "retrieved_htmls"
+directory.mkdir(exist_ok=True)
+
+OUT_HTML_LOG = directory / f"retrieved_htmls_{timestamp}.txt"
+
 log = logging.getLogger("ConsistencyTestRunner")
 console = Console()
 
