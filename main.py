@@ -1,78 +1,79 @@
 import asyncio
 from datetime import datetime
 import importlib
-import logging
 from typing import Any, Optional
 from fastapi import Body, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
+from loguru import logger
 from pydantic import ValidationError
 import uvicorn
 from utils.logger import setup_logging
 
 
-def main(service_name: str):
-    """
-    Creates and configures a FastAPI application for a specific service.
-    """
+def create_app(service_name: str = "tnstc"):
     setup_logging()
-    log = logging.getLogger(__name__)
+    logger.info(f"Creating FastAPI app for service '{service_name}'")
+
+    service_instance = None
 
     try:
         config_module = importlib.import_module(f"services.{service_name}.config")
-        schemas_module = importlib.import_module(f"services.{service_name}.schemas")
         service_module = importlib.import_module(f"services.{service_name}.service")
-    except ImportError as e:
-        log.error(f"Error importing modules for service '{service_name}': {e}")
-        raise
+        schemas_module = importlib.import_module(f"services.{service_name}.schemas")
 
-    ServiceClass = getattr(service_module, f"{service_name.upper()}Service")
-    SearchRequestSchema = getattr(
-        schemas_module, f"{service_name.upper()}SearchRequest"
-    )
-    BusSearchResponseSchema = getattr(
-        schemas_module, f"{service_name.upper()}BusSearchResponse"
-    )
-    ResponseMetadataSchema = getattr(
-        schemas_module, f"{service_name.upper()}ResponseMetadata"
-    )
+        logger.debug(
+            f"Modules loaded for service '{service_name}': "
+            f"{config_module}, {service_module}, {schemas_module}"
+        )
 
-    PARSER_STRATEGY = getattr(config_module, "PARSER_STRATEGY")
-    GEMINI_MODEL = getattr(config_module, "GEMINI_MODEL")
-    OLLAMA_MODEL = getattr(config_module, "OLLAMA_MODEL")
-    APP_ENV = getattr(config_module, "APP_ENV")
+        ServiceClass = getattr(service_module, f"{service_name.upper()}Service")
+        RequestSchema = getattr(schemas_module, f"{service_name.upper()}SearchRequest")
+        ResponseSchema = getattr(
+            schemas_module, f"{service_name.upper()}BusSearchResponse"
+        )
+        MetaSchema = getattr(schemas_module, f"{service_name.upper()}ResponseMetadata")
 
-    # Initialize FastAPI App
+        PARSER_STRATEGY = getattr(config_module, "PARSER_STRATEGY", "dynamic")
+        GEMINI_MODEL = getattr(config_module, "GEMINI_MODEL", None)
+        OLLAMA_MODEL = getattr(config_module, "OLLAMA_MODEL", None)
+        APP_ENV = getattr(config_module, "APP_ENV", None)
+
+        service_instance = ServiceClass()
+        logger.info(f"Service instance for '{service_name}' created successfully.")
+
+    except Exception as e:
+        logger.critical(f"Failed to load service modules for '{service_name}': {e}")
+        raise RuntimeError("Service Loading Failed")
+
+    async def startup_event():
+        logger.info(f"Running startup event for service '{service_name}'")
+        if hasattr(service_instance, "initialize_db"):
+            await service_instance.initialize_db()
+            logger.info("Database initialized successfully during startup.")
+
+        logger.info(f"Service '{service_name}' lifecycle started.")
+
     app = FastAPI(
-        title=f"{service_name.upper()} API Wrapper",
-        description=f"A FastAPI wrapper for the {service_name.upper()} booking website",
-        version="1.0.0",
+        title=f"{service_name.upper()} API",
+        version="2.2.0",
+        on_startup=[startup_event],
     )
-
-    # For development - adjust as you need. Removed "*" when allow_credentials=True.
-    DEVELOPMENT_ORIGINS = ["http://localhost:9000", "http://127.0.0.1:9000"]
 
     app.add_middleware(
         CORSMiddleware,
-        allow_credentials=True,
-        allow_methods=["GET", "POST"],
+        allow_origins=["*"],
+        allow_methods=["*"],
         allow_headers=["*"],
-        allow_origins=DEVELOPMENT_ORIGINS,
     )
 
-    service_instance = ServiceClass()
-
-    # Endpoints
-    @app.get("/", tags=["Health"])
-    async def check_health():
-        log.info("Health Check Endpoint was hit.")
-        return {
-            "status": "ok",
-            "message": f"{service_name.upper()} API Wrapper is running.",
-        }
+    @app.get("/health", tags=["Health"])
+    async def health():
+        logger.info("Health endpoint hit.")
+        return {"status": "ok", "timestamp": datetime.now()}
 
     @app.get("/config_info", tags=["Diagnostics"])
     async def get_config_info():
-        """Returns non-sensitive runtime configuration."""
+        logger.info("Config info endpoint hit.")
         return {
             "parser_strategy": PARSER_STRATEGY,
             "gemini_model": GEMINI_MODEL,
@@ -80,105 +81,115 @@ def main(service_name: str):
             "app_env": APP_ENV,
         }
 
-    @app.post(
-        "/search_buses",
-        response_model=BusSearchResponseSchema,
-        status_code=status.HTTP_200_OK,
-    )
-    async def search_buses(
-        request: Any = Body(
-            ..., description="Search request payload (validated at runtime)"
-        ),
+    @app.post("/search", response_model=ResponseSchema)
+    async def search(
+        payload: Any = Body(..., description="Search request payload"),
         limit: Optional[int] = Query(
-            default=None,
+            None,
             gt=0,
             title="Limit Parsed Results",
             description="Process and return only the first 'n' bus services found.",
         ),
     ):
-        """
-        Performs the full, multi-step bus search against the external API, and then filters the results.
-        We accept the raw JSON body and parse it with the dynamically-loaded Pydantic model.
-        """
-        search_time = datetime.now()
+        start_time = datetime.now()
+        logger.info(f"/search endpoint hit at {start_time.isoformat()}")
 
         try:
-            parsed_request = SearchRequestSchema.parse_obj(request)
+            req = RequestSchema.parse_obj(payload)
+            logger.info(
+                f"Received search request: {req.from_place_name} -> "
+                f"{req.to_place_name} on {req.onward_date}"
+            )
+
         except ValidationError as ve:
-            log.warning("Request validation failed: %s", ve)
+            logger.error(f"Validation Error: {ve}")
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail={"validation_error": ve.errors()},
+                status.HTTP_422_UNPROCESSABLE_ENTITY, detail=ve.errors()
             )
-
-        log.info(
-            f"Received search request: {parsed_request.from_place_name} -> "
-            f"{parsed_request.to_place_name} on {parsed_request.onward_date}"
-        )
 
         try:
-            from_place_task = service_instance._fetch_place_info(
-                parsed_request.from_place_name, is_from_place=True
-            )
-            to_place_task = service_instance._fetch_place_info(
-                parsed_request.to_place_name, is_from_place=False
-            )
-            from_place, to_place = await asyncio.gather(from_place_task, to_place_task)
+            from_place = None
+            to_place = None
 
-            services = await service_instance.search_services(parsed_request)
+            if hasattr(service_instance, "_fetch_place_info"):
+                logger.debug(
+                    "Resolving from/to places via service_instance._fetch_place_info"
+                )
+
+                from_task = service_instance._fetch_place_info(
+                    req.from_place_name, is_from_place=True
+                )
+
+                to_task = service_instance._fetch_place_info(
+                    req.to_place_name, is_from_place=False
+                )
+
+                from_place, to_place = await asyncio.gather(from_task, to_task)
+
+                logger.debug(
+                    "Resolved places -> "
+                    f"From={getattr(from_place, 'code', None)}, "
+                    f"To={getattr(to_place, 'code', None)}"
+                )
+
+            services = await service_instance.search_services(req)
+            logger.info(f"Service returned {len(services)} services before limit.")
+
+            if limit and services:
+                logger.debug(f"Applying limit={limit} to services list.")
+                services = services[:limit]
 
             if not services:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="No bus services found matching the specified route, date, and filters.",
-                )
+                logger.warning("No bus services found for given criteria.")
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "No buses found")
 
-            total_found = len(services)
-            log.info(
-                f"Bus parsing complete. Parser found {total_found} services (before filtering)."
-            )
+            parser_strategy_value = "dynamic"
 
-            filtered_bus_list = service_instance._filter_bus_services(
-                services, parsed_request
-            )
-
-            if not filtered_bus_list:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="No bus services found matching the specified route, date, and filters.",
-                )
-
-            log.info(
-                f"Filtering complete. {len(filtered_bus_list)} services remain after applying filters."
-            )
-
-            metadata_obj = ResponseMetadataSchema(
-                search_timestamp=search_time,
-                parser_strategy=PARSER_STRATEGY,
-                total_services_found_before_filtering=total_found,
+            meta = MetaSchema(
+                search_timestamp=start_time,
+                parser_strategy=parser_strategy_value,
+                total_services_found_before_filtering=len(services),
                 limit_applied=limit,
             )
 
-            return BusSearchResponseSchema(
-                metadata=metadata_obj,
-                from_place=from_place,
-                to_place=to_place,
-                services=filtered_bus_list,
+            if from_place is not None:
+                from_payload = from_place
+            else:
+                from_payload = {
+                    "id": "000",
+                    "code": "UNK",
+                    "name": req.from_place_name,
+                }
+
+            if to_place is not None:
+                to_payload = to_place
+            else:
+                to_payload = {
+                    "id": "000",
+                    "code": "UNK",
+                    "name": req.to_place_name,
+                }
+
+            logger.info(
+                f"Search completed successfully, returning {len(services)} services."
+            )
+
+            return ResponseSchema(
+                from_place=from_payload,
+                to_place=to_payload,
+                services=services,
+                metadata=meta,
             )
 
         except HTTPException:
             raise
         except Exception as e:
-            log.exception("Unexpected error during search")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Unexpected error during search: {e}",
-            )
+            logger.exception("Unhandled error in search endpoint")
+            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, str(e))
 
     return app
 
 
 if __name__ == "__main__":
-    service_to_run = "tnstc"
-    app = main(service_to_run)
-    uvicorn.run(app, host="localhost", port=9000, reload=False)
+    app = create_app("tnstc")
+    uvicorn.run(app, host="0.0.0.0", port=9000)
