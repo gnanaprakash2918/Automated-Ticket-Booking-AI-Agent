@@ -17,6 +17,14 @@ from .parsers.bs_parser import BeautifulSoupParser
 from .schemas import TNSTCBusService, TNSTCPlaceInfo, TNSTCSearchRequest
 
 
+class AmbiguousPlaceError(Exception):
+    """Raised when multiple places match the search query."""
+
+    def __init__(self, candidates: List[TNSTCPlaceInfo]):
+        self.candidates = candidates
+        super().__init__(f"Found {len(candidates)} matching places. Please refine your search.")
+
+
 class TNSTCService(BaseService):
     """
     Concrete implementation of the Transport Service for TNSTC.
@@ -55,6 +63,7 @@ class TNSTCService(BaseService):
         """
         Resolves internal TNSTC Place IDs/Codes from a string name.
         Uses DB-backed cache, falling back to TNSTC API.
+        Raises AmbiguousPlaceError if multiple matches are found.
         """
 
         place_type = "From" if is_from_place else "To"
@@ -109,29 +118,35 @@ class TNSTCService(BaseService):
                 raise ValueError(f"Place not found: {place_name}")
 
             # TNSTC returns data separated by '^', format typically: ID:CODE:NAME
-            place_list = [item for item in raw_response.split("^") if item]
+            place_strings = [item for item in raw_response.split("^") if item]
 
-            if not place_list:
+            if not place_strings:
                 logger.error(
                     f"TNSTC: Could not find exact place match for: {place_name}. "
                     f"Raw response: '{raw_response}'"
                 )
-
                 raise ValueError(f"Could not find exact place match for: {place_name}.")
 
-            first_match = place_list[0]
-            parts = first_match.split(":")
+            candidates = []
+            for p_str in place_strings:
+                parts = p_str.split(":")
+                if len(parts) >= 3:
+                    candidates.append(
+                        TNSTCPlaceInfo(id=parts[0], code=parts[1], name=parts[2])
+                    )
 
-            if len(parts) < 3:
-                logger.error(
-                    f"TNSTC: Invalid place format for '{place_name}': '{first_match}'"
+            if not candidates:
+                raise ValueError(f"No valid place format found for: {place_name}")
+
+            # If multiple candidates found, raise AmbiguousPlaceError
+            if len(candidates) > 1:
+                logger.warning(
+                    f"TNSTC: Ambiguous place '{place_name}'. Found {len(candidates)} matches: "
+                    f"{[c.name for c in candidates]}"
                 )
+                raise AmbiguousPlaceError(candidates)
 
-                raise ValueError(
-                    f"External API returned invalid place format: {first_match}"
-                )
-
-            place = TNSTCPlaceInfo(id=parts[0], code=parts[1], name=parts[2])
+            place = candidates[0]
 
             logger.info(
                 f"TNSTC: Resolved '{place_name}' -> ID={place.id}, Code={place.code}"
@@ -147,7 +162,6 @@ class TNSTCService(BaseService):
                         "place_id": place.id,
                     },
                 )
-
                 logger.debug(f"TNSTC: Cached place '{place_name}' successfully.")
             except Exception as e:
                 logger.warning(
@@ -338,8 +352,12 @@ class TNSTCService(BaseService):
         return filtered
 
     async def search_services(
-        self, request: TNSTCSearchRequest, limit: Optional[int] = None
-    ) -> List[TNSTCBusService]:
+        self,
+        request: TNSTCSearchRequest,
+        limit: Optional[int] = None,
+        from_place: Optional[TNSTCPlaceInfo] = None,
+        to_place: Optional[TNSTCPlaceInfo] = None,
+    ) -> tuple[List[TNSTCBusService], TNSTCPlaceInfo, TNSTCPlaceInfo]:
         """
         Orchestrates the full search flow with smart pre-filtering:
         Place Resolution -> HTTP Request -> Pre-filtering -> Limited Parsing -> Validation.
@@ -348,9 +366,14 @@ class TNSTCService(BaseService):
             request: The search request with origin, destination, date, and filter criteria.
             limit: Optional maximum number of buses to parse (reduces LLM costs).
                    Applied AFTER pre-filtering based on price/time/bus_type.
+            from_place: Optional pre-resolved origin place.
+            to_place: Optional pre-resolved destination place.
 
         Returns:
-            List of TNSTCBusService objects that match all criteria.
+            Tuple containing:
+            - List of TNSTCBusService objects that match all criteria.
+            - Resolved from_place info.
+            - Resolved to_place info.
         """
 
         logger.info(
@@ -360,14 +383,16 @@ class TNSTCService(BaseService):
         )
 
         try:
-            # 1. Resolve Places
-            from_place = await self._fetch_place_info(
-                request.from_place_name, is_from_place=True
-            )
-
-            to_place = await self._fetch_place_info(
-                request.to_place_name, is_from_place=False
-            )
+            # 1. Resolve Places (if not provided)
+            if not from_place:
+                from_place = await self._fetch_place_info(
+                    request.from_place_name, is_from_place=True
+                )
+            
+            if not to_place:
+                to_place = await self._fetch_place_info(
+                    request.to_place_name, is_from_place=False
+                )
 
             logger.debug(
                 "TNSTC: Resolved places -> "
@@ -429,7 +454,7 @@ class TNSTCService(BaseService):
                         logger.warning(
                             "TNSTC: No buses found by BeautifulSoupParser"
                         )
-                        return []
+                        return [], from_place, to_place
 
                     # STEP 2: Extract metadata for smart pre-filtering
                     logger.info("TNSTC: Extracting metadata for smart pre-filtering...")
@@ -448,7 +473,7 @@ class TNSTCService(BaseService):
                         logger.warning(
                             "TNSTC: No buses passed pre-filtering criteria"
                         )
-                        return []
+                        return [], from_place, to_place
 
                     # STEP 4: Apply limit to reduce LLM costs
                     if limit and len(filtered_metadata) > limit:
@@ -491,7 +516,7 @@ class TNSTCService(BaseService):
                         logger.error(
                             "TNSTC: BeautifulSoupParser failed and no LLM parser available for fallback"
                         )
-                        return []
+                        return [], from_place, to_place
                     else:
                         # Use LLM to parse full HTML
                         logger.info(
@@ -507,32 +532,69 @@ class TNSTCService(BaseService):
             logger.info(
                 f"TNSTC: Search Complete. Found {len(final_services)} valid services."
             )
-            return final_services
+            return final_services, from_place, to_place
 
+        except AmbiguousPlaceError:
+            raise  # Re-raise for controller to handle
         except Exception as e:
             logger.error(f"TNSTC Service Search Failed: {e}", exc_info=True)
-            return []
+            # Return empty list but try to return resolved places if available
+            return [], from_place if 'from_place' in locals() else None, to_place if 'to_place' in locals() else None
 
     async def search_places(self, query: str) -> List[TNSTCPlaceInfo]:
         """
         Searches for places matching the query string.
-        First checks the local cache, then (optionally) could query the API if needed.
-        For now, we rely on the cache and what we've learned from previous lookups.
+        First checks the local cache. If results are insufficient (< 5), queries the API.
         """
         logger.info(f"TNSTC: Searching for places matching '{query}'")
 
         # 1. Search in Cache
         cached_results = await search_places_in_cache("TNSTC", query)
-
-        places = []
-        for res in cached_results:
-            places.append(
-                TNSTCPlaceInfo(
-                    id=res["place_id"],
-                    code=res["place_code"],
-                    name=res["place_name"],
-                )
+        places = [
+            TNSTCPlaceInfo(
+                id=res["place_id"],
+                code=res["place_code"],
+                name=res["place_name"],
             )
+            for res in cached_results
+        ]
 
         logger.info(f"TNSTC: Found {len(places)} matches in cache for '{query}'")
+
+        # 2. If insufficient results, query API
+        if len(places) < 5:
+            logger.info("TNSTC: Insufficient cache results, querying API...")
+            try:
+                # We use the same logic as _fetch_place_info but expect multiple results
+                # We can reuse the API call structure
+                async with httpx.AsyncClient() as client:
+                    # Use 'matchStartPlace' as it's a generic search param
+                    data = {"hiddenAction": "LoadFromPlaceList", "matchStartPlace": query}
+                    
+                    response = await client.post(self.base_url, data=data, timeout=10.0)
+                    if response.status_code == 200:
+                        raw_response = response.text.strip()
+                        place_strings = [item for item in raw_response.split("^") if item]
+                        
+                        for p_str in place_strings:
+                            parts = p_str.split(":")
+                            if len(parts) >= 3:
+                                place = TNSTCPlaceInfo(id=parts[0], code=parts[1], name=parts[2])
+                                
+                                # Add to list if not already present
+                                if not any(p.code == place.code for p in places):
+                                    places.append(place)
+                                    
+                                    # Cache it
+                                    await save_place_to_cache(
+                                        "TNSTC",
+                                        {
+                                            "place_name": place.name,
+                                            "place_code": place.code,
+                                            "place_id": place.id,
+                                        },
+                                    )
+            except Exception as e:
+                logger.warning(f"TNSTC: API place search failed: {e}")
+
         return places

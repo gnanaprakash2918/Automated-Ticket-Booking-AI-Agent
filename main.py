@@ -3,6 +3,7 @@ from datetime import datetime
 import importlib
 from typing import Any, Optional
 from fastapi import Body, FastAPI, HTTPException, Query, status
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from pydantic import ValidationError
@@ -32,6 +33,7 @@ def create_app(service_name: str = "tnstc"):
             schemas_module, f"{service_name.upper()}BusSearchResponse"
         )
         MetaSchema = getattr(schemas_module, f"{service_name.upper()}ResponseMetadata")
+        AmbiguousPlaceError = getattr(service_module, "AmbiguousPlaceError", None)
 
         PARSER_STRATEGY = getattr(config_module, "PARSER_STRATEGY", "dynamic")
         GEMINI_MODEL = getattr(config_module, "GEMINI_MODEL", None)
@@ -81,6 +83,21 @@ def create_app(service_name: str = "tnstc"):
             "app_env": APP_ENV,
         }
 
+    @app.get("/places/search", tags=["Places"])
+    async def search_places(query: str = Query(..., min_length=3)):
+        """
+        Search for places by name.
+        """
+        logger.info(f"Place search endpoint hit for query: '{query}'")
+        if hasattr(service_instance, "search_places"):
+            places = await service_instance.search_places(query)
+            return {"places": places}
+        else:
+            raise HTTPException(
+                status.HTTP_501_NOT_IMPLEMENTED, 
+                "Place search not implemented for this service"
+            )
+
     @app.post("/search", response_model=ResponseSchema)
     async def search(
         payload: Any = Body(..., description="Search request payload"),
@@ -108,35 +125,22 @@ def create_app(service_name: str = "tnstc"):
             )
 
         try:
-            from_place = None
-            to_place = None
+            # Call service directly - it now handles place resolution and returns a tuple
+            result = await service_instance.search_services(req, limit=limit)
 
-            if hasattr(service_instance, "_fetch_place_info"):
-                logger.debug(
-                    "Resolving from/to places via service_instance._fetch_place_info"
-                )
+            # Handle tuple return (new contract) vs list return (backward compatibility)
+            if isinstance(result, tuple) and len(result) == 3:
+                services, from_place, to_place = result
+            else:
+                services = result
+                from_place, to_place = None, None
 
-                from_task = service_instance._fetch_place_info(
-                    req.from_place_name, is_from_place=True
-                )
-
-                to_task = service_instance._fetch_place_info(
-                    req.to_place_name, is_from_place=False
-                )
-
-                from_place, to_place = await asyncio.gather(from_task, to_task)
-
-                logger.debug(
-                    "Resolved places -> "
-                    f"From={getattr(from_place, 'code', None)}, "
-                    f"To={getattr(to_place, 'code', None)}"
-                )
-
-            services = await service_instance.search_services(req, limit=limit)
             logger.info(f"Service returned {len(services)} services.")
 
             if not services:
                 logger.warning("No bus services found for given criteria.")
+                # If we have resolved places, we can still return them in a 404 or just 404
+                # But usually 404 is fine.
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "No buses found")
 
             parser_strategy_value = "dynamic"
@@ -148,19 +152,16 @@ def create_app(service_name: str = "tnstc"):
                 limit_applied=limit,
             )
 
-            if from_place is not None:
-                from_payload = from_place
-            else:
-                from_payload = {
+            # Fallback for places if service didn't return them (e.g. old contract)
+            if from_place is None:
+                from_place = {
                     "id": "000",
                     "code": "UNK",
                     "name": req.from_place_name,
                 }
-
-            if to_place is not None:
-                to_payload = to_place
-            else:
-                to_payload = {
+            
+            if to_place is None:
+                to_place = {
                     "id": "000",
                     "code": "UNK",
                     "name": req.to_place_name,
@@ -171,15 +172,27 @@ def create_app(service_name: str = "tnstc"):
             )
 
             return ResponseSchema(
-                from_place=from_payload,
-                to_place=to_payload,
+                from_place=from_place,
+                to_place=to_place,
                 services=services,
                 metadata=meta,
             )
 
-        except HTTPException:
-            raise
         except Exception as e:
+            # Handle AmbiguousPlaceError dynamically
+            if AmbiguousPlaceError and isinstance(e, AmbiguousPlaceError):
+                logger.warning(f"Ambiguous place error: {e}")
+                return JSONResponse(
+                    status_code=status.HTTP_300_MULTIPLE_CHOICES,
+                    content={
+                        "message": str(e),
+                        "candidates": [c.model_dump() for c in e.candidates]
+                    }
+                )
+            
+            if isinstance(e, HTTPException):
+                raise e
+                
             logger.exception("Unhandled error in search endpoint")
             raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, str(e))
 
