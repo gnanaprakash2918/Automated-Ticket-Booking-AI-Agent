@@ -1,56 +1,95 @@
 import asyncio
-from datetime import date
+from datetime import datetime
 import logging
 from pathlib import Path
-from typing import Any, Dict, List
+import sys
+from typing import Any, Dict, List, Type
 import httpx
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
-from tnstc_api.parsers.bs_parser import BeautifulSoupParser
-from tnstc_api.parsers.gemini_parser import GeminiParser
-from tnstc_api.parsers.ollama_parser import OllamaParser
-from tnstc_api.schemas import BusService, SearchRequest
-from tnstc_api.tnstc_client import get_place_info
-from utils.logger import setup_logging
 
 
-OUT_HTML_LOG = Path(__file__).with_name("retrieved_htmls.txt")
+# Fix this shit before its too late : TODO
+_project_root = Path(__file__).resolve().parent.parent
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
 
-TEST_DATE = date(2025, 12, 20).strftime("%d/%m/%Y")
-TEST_REQUEST = SearchRequest(
-    from_place_name="DHARMAPURI",
-    to_place_name="CHENNAI-PT DR. M.G.R. BS",
+from test_config import (  # noqa: E402
+    CRITICAL_FIELDS,
+    LIMIT_BUSES,
+    SERVICE_TEST_DATA,
+    TEST_DATE,
+    TEST_SERVICE,
+)
+from services.tnstc.parsers.base import AbstractBusParser  # noqa: E402
+from services.tnstc.parsers.bs_parser import BeautifulSoupParser  # noqa: E402
+from services.tnstc.parsers.gemini_parser import GeminiParser  # noqa: E402
+from services.tnstc.parsers.ollama_parser import OllamaParser  # noqa: E402
+from services.tnstc.schemas import TNSTCBusService, TNSTCSearchRequest  # noqa: E402
+from services.tnstc.service import TNSTCService  # noqa: E402
+from utils.logger import setup_logging  # noqa: E402
+
+
+def load_service_module(service_name: str) -> Dict[str, Any]:
+    """
+    Dynamically load service module and return its components.
+
+    Args:
+        service_name: Name of the service to load (e.g., "tnstc", "redbus")
+
+    Returns:
+        Dictionary containing parsers, service class, and schemas
+    """
+    service_map = {
+        "tnstc": {
+            "parsers": {
+                "beautifulsoup": BeautifulSoupParser,
+                "gemini": GeminiParser,
+                "ollama": OllamaParser,
+            },
+            "service_class": TNSTCService,
+            "schema": TNSTCBusService,
+            "request_schema": TNSTCSearchRequest,
+        }
+        # Future: Add "redbus", "irctc" etc. here
+    }
+
+    if service_name not in service_map:
+        raise ValueError(
+            f"Unsupported service: {service_name}. "
+            f"Available services: {list(service_map.keys())}"
+        )
+
+    return service_map[service_name]
+
+
+service_config = load_service_module(TEST_SERVICE)
+PARSERS_MAP: Dict[str, Type[AbstractBusParser]] = service_config["parsers"]
+ServiceClass = service_config["service_class"]
+BusServiceSchema = service_config["schema"]
+RequestSchema = service_config["request_schema"]
+
+service_instance: TNSTCService = ServiceClass()
+
+test_data = SERVICE_TEST_DATA[TEST_SERVICE]
+TEST_REQUEST = RequestSchema(
+    from_place_name=test_data["from_place"],
+    to_place_name=test_data["to_place"],
     onward_date=TEST_DATE,
 )
 
-LIMIT_BUSES = 5
+now = datetime.now()
+timestamp = (
+    now.strftime("%Y%m%d_%I%M%S")
+    + f"{int(now.microsecond / 1000):03d}"
+    + now.strftime("%p").lower()
+)
 
+OUT_HTML_LOG = Path(__file__).with_name(f"retrieved_htmls_{timestamp}.txt")
 log = logging.getLogger("ConsistencyTestRunner")
 console = Console()
-PARSERS_MAP = {
-    "beautifulsoup": BeautifulSoupParser,
-    "gemini": GeminiParser,
-    "ollama": OllamaParser,
-}
-
-CRITICAL_FIELDS = [
-    "trip_code",
-    "route_code",
-    "bus_type",
-    "departure_time",
-    "arrival_time",
-    "duration",
-]
-NON_CRITICAL_FIELDS = [
-    "operator",
-    "price_in_rs",
-    "seats_available",
-    "via_route",
-    "total_kms",
-    "child_fare",
-]
 
 
 async def append_html_to_log(
@@ -66,7 +105,7 @@ async def append_html_to_log(
 
 
 def compare_service_fields(
-    service_a: BusService, service_b: BusService, parser_a: str, parser_b: str
+    service_a, service_b, parser_a: str, parser_b: str
 ) -> Dict[str, Any]:
     diffs = {}
 
@@ -96,7 +135,7 @@ def compare_service_fields(
 
 
 def get_comparison_summary(
-    all_results: Dict[str, List[BusService]],
+    all_results: Dict[str, List[Any]],
 ) -> List[Dict[str, Any]]:
     bs_results = all_results.get("beautifulsoup", [])
     summary = []
@@ -147,7 +186,7 @@ async def run_parser(
     html_content: str,
     limit: int,
     write_lock: asyncio.Lock,
-) -> List[BusService]:
+) -> List[Any]:
     try:
         await append_html_to_log(write_lock, f"{parser_name}.html", html_content)
 
@@ -164,12 +203,14 @@ async def main_test_runner():
     write_lock = asyncio.Lock()
 
     async with httpx.AsyncClient(timeout=30.0) as client:
+        await service_instance.initialize_db()
+
         try:
-            from_place, to_place = await asyncio.gather(
-                get_place_info(
-                    client, TEST_REQUEST.from_place_name, is_from_place=True
-                ),
-                get_place_info(client, TEST_REQUEST.to_place_name, is_from_place=False),
+            from_place = await service_instance._fetch_place_info(
+                TEST_REQUEST.from_place_name, is_from_place=True
+            )
+            to_place = await service_instance._fetch_place_info(
+                TEST_REQUEST.to_place_name, is_from_place=False
             )
 
             payload = {
@@ -259,7 +300,7 @@ async def main_test_runner():
 
         is_bus_fully_consistent = True
 
-        all_fields = list(BusService.model_fields.keys())
+        all_fields = list(BusServiceSchema.model_fields.keys())
 
         for field in all_fields:
             if field in ["llm_reasoning", "explanation"]:
