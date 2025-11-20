@@ -10,6 +10,7 @@ retrieved_htmls.txt
 read.py
 output.txt
 .idea/
+logs/
 
 # C extensions
 *.so

@@ -1,5 +1,7 @@
 import logging
+from pathlib import Path
 import sys
+import uuid
 from loguru import logger
 from .root_config import LOG_DIR
 
@@ -17,6 +19,11 @@ def setup_logging():
     3. Interception: Captures standard python logging and routes to Loguru.
     """
 
+    Path(LOG_DIR).mkdir(parents=True, exist_ok=True)
+
+    session_id = uuid.uuid4().hex
+    session_file = f"{LOG_DIR}/app_{session_id}.json"
+
     logger.remove()
 
     logger.add(
@@ -30,15 +37,15 @@ def setup_logging():
     )
 
     logger.add(
-        f"{LOG_DIR}/app_production.json",
+        session_file,
         rotation="500 MB",
         retention="50 days",
         compression="zip",
         serialize=True,
         level="DEBUG",
         enqueue=True,
-        backtrace=True,
-        diagnose=True,
+        backtrace=False,
+        diagnose=False,
     )
 
     class InterceptHandler(logging.Handler):
@@ -56,15 +63,18 @@ def setup_logging():
             ):
                 frame = frame.f_back
                 depth += 1
+
             logger.opt(depth=depth, exception=record.exc_info).log(
                 level, record.getMessage()
             )
 
-    logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
+    intercept_handler = InterceptHandler()
 
-    # Redirect logs from specific libraries to Loguru
+    logging.basicConfig(handlers=[intercept_handler], level=0, force=True)
+
     for lib in ["uvicorn", "uvicorn.access", "fastapi", "httpx"]:
         _logger = logging.getLogger(lib)
-        _logger.handlers = [InterceptHandler()]
+        _logger.handlers = [intercept_handler]
+        _logger.propagate = False
 
-    logger.info("Production logging initialized. Logs are serializing to JSON.")
+    logger.info(f"Session logging initialized. File: {session_file}")
