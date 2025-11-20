@@ -214,6 +214,20 @@ class TNSTCSearchRequest(BaseModel):
         description='List of preferred bus type strings. If None, all types are allowed. (e.g., ["AC SLEEPER", "ULTRA DELUXE"])',
     )
 
+    # Optional Precise Location Fields (to bypass lookup)
+    from_place_id: Optional[str] = Field(
+        default=None, description="Exact TNSTC ID for origin place."
+    )
+    from_place_code: Optional[str] = Field(
+        default=None, description="Exact TNSTC Code for origin place."
+    )
+    to_place_id: Optional[str] = Field(
+        default=None, description="Exact TNSTC ID for destination place."
+    )
+    to_place_code: Optional[str] = Field(
+        default=None, description="Exact TNSTC Code for destination place."
+    )
+
     model_config = {
         "json_schema_extra": {
             "examples": [

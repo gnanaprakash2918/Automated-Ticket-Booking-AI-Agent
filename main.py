@@ -17,28 +17,27 @@ def create_app(service_name: str = "tnstc"):
     service_instance = None
 
     try:
+        # Dynamic Import of Service Modules
         config_module = importlib.import_module(f"services.{service_name}.config")
         service_module = importlib.import_module(f"services.{service_name}.service")
         schemas_module = importlib.import_module(f"services.{service_name}.schemas")
 
-        logger.debug(
-            f"Modules loaded for service '{service_name}': "
-            f"{config_module}, {service_module}, {schemas_module}"
-        )
+        logger.debug(f"Modules loaded for service '{service_name}'")
 
+        # Reflectively get classes
         ServiceClass = getattr(service_module, f"{service_name.upper()}Service")
         RequestSchema = getattr(schemas_module, f"{service_name.upper()}SearchRequest")
-        ResponseSchema = getattr(
-            schemas_module, f"{service_name.upper()}BusSearchResponse"
-        )
+        ResponseSchema = getattr(schemas_module, f"{service_name.upper()}BusSearchResponse")
         MetaSchema = getattr(schemas_module, f"{service_name.upper()}ResponseMetadata")
         AmbiguousPlaceError = getattr(service_module, "AmbiguousPlaceError", None)
 
+        # Load Config
         PARSER_STRATEGY = getattr(config_module, "PARSER_STRATEGY", "dynamic")
         GEMINI_MODEL = getattr(config_module, "GEMINI_MODEL", None)
         OLLAMA_MODEL = getattr(config_module, "OLLAMA_MODEL", None)
         APP_ENV = getattr(config_module, "APP_ENV", None)
 
+        # Instantiate Service
         service_instance = ServiceClass()
         logger.info(f"Service instance for '{service_name}' created successfully.")
 
@@ -51,12 +50,11 @@ def create_app(service_name: str = "tnstc"):
         if hasattr(service_instance, "initialize_db"):
             await service_instance.initialize_db()
             logger.info("Database initialized successfully during startup.")
-
         logger.info(f"Service '{service_name}' lifecycle started.")
 
     app = FastAPI(
         title=f"{service_name.upper()} API",
-        version="2.2.0",
+        version="2.3.0",
         on_startup=[startup_event],
     )
 
@@ -74,7 +72,6 @@ def create_app(service_name: str = "tnstc"):
 
     @app.get("/config_info", tags=["Diagnostics"])
     async def get_config_info():
-        logger.info("Config info endpoint hit.")
         return {
             "parser_strategy": PARSER_STRATEGY,
             "gemini_model": GEMINI_MODEL,
@@ -117,17 +114,10 @@ def create_app(service_name: str = "tnstc"):
                 f"{req.to_place_name} on {req.onward_date}"
             )
 
-        except ValidationError as ve:
-            logger.error(f"Validation Error: {ve}")
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY, detail=ve.errors()
-            )
-
-        try:
-            # Call service directly - it now handles place resolution and returns a tuple
+            # Call service
             result = await service_instance.search_services(req, limit=limit)
 
-            # Handle tuple return (new contract) vs list return (backward compatibility)
+            # Unpack result
             if isinstance(result, tuple) and len(result) == 3:
                 services, from_place, to_place = result
             else:
@@ -138,37 +128,20 @@ def create_app(service_name: str = "tnstc"):
 
             if not services:
                 logger.warning("No bus services found for given criteria.")
-                # If we have resolved places, we can still return them in a 404 or just 404
-                # But usually 404 is fine.
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "No buses found")
-
-            parser_strategy_value = "dynamic"
 
             meta = MetaSchema(
                 search_timestamp=start_time,
-                parser_strategy=parser_strategy_value,
-                total_services_found_before_filtering=len(services),
+                parser_strategy="dynamic",
+                total_services_found_before_filtering=len(services), # This logic might need adjustment if we want true pre-filter count, but for now it's consistent
                 limit_applied=limit,
             )
 
-            # Fallback for places if service didn't return them (e.g. old contract)
+            # Fallback for places if service didn't return them
             if from_place is None:
-                from_place = {
-                    "id": "000",
-                    "code": "UNK",
-                    "name": req.from_place_name,
-                }
-
+                from_place = {"id": "000", "code": "UNK", "name": req.from_place_name}
             if to_place is None:
-                to_place = {
-                    "id": "000",
-                    "code": "UNK",
-                    "name": req.to_place_name,
-                }
-
-            logger.info(
-                f"Search completed successfully, returning {len(services)} services."
-            )
+                to_place = {"id": "000", "code": "UNK", "name": req.to_place_name}
 
             return ResponseSchema(
                 from_place=from_place,
@@ -177,13 +150,20 @@ def create_app(service_name: str = "tnstc"):
                 metadata=meta,
             )
 
+        except ValidationError as ve:
+            logger.error(f"Validation Error: {ve}")
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, detail=ve.errors()
+            )
         except Exception as e:
-            # Handle AmbiguousPlaceError dynamically
+            # Handle AmbiguousPlaceError
             if AmbiguousPlaceError and isinstance(e, AmbiguousPlaceError):
                 logger.warning(f"Ambiguous place error: {e}")
                 candidates = getattr(e, "candidates", []) or []
+                # Serialize candidates if they are Pydantic models
                 serialized_candidates = [
-                    getattr(c, "model_dump", lambda: c)() for c in candidates
+                    c.model_dump() if hasattr(c, "model_dump") else c.__dict__
+                    for c in candidates
                 ]
                 return JSONResponse(
                     status_code=status.HTTP_300_MULTIPLE_CHOICES,
