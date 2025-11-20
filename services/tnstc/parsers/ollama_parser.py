@@ -7,7 +7,7 @@ from tenacity import Retrying, stop_after_attempt, wait_exponential
 from llm.interface import LLMInterface
 from llm.ollama import OllamaLLM
 from utils.helpers import minify_html
-from utils.logging_setup import setup_logging
+from utils.logger import setup_logging
 from ..config import OLLAMA_CONCURRENCY_LIMIT
 from ..schemas import TNSTCBusService
 from .base import AbstractBusParser

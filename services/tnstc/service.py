@@ -3,7 +3,7 @@ import re
 from typing import List
 from async_lru import alru_cache
 import httpx
-from utils.logging_setup import setup_logging
+from utils.logger import setup_logging
 from ..base.service import BaseService
 from .config import TNSTC_BASE_URL
 from .parsers import get_parser

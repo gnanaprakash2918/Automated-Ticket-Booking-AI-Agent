@@ -3,7 +3,7 @@ import re
 from typing import Any, Dict, List, Optional
 from bs4 import BeautifulSoup, Tag
 import httpx
-from utils.logging_setup import setup_logging
+from utils.logger import setup_logging
 from ..schemas import TNSTCBusService
 from .base import AbstractBusParser
 

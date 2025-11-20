@@ -7,7 +7,7 @@ from fastapi import Body, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 import uvicorn
-from utils.logging_setup import setup_logging
+from utils.logger import setup_logging
 
 
 def main(service_name: str):

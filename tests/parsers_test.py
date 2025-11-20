@@ -13,7 +13,7 @@ from tnstc_api.parsers.gemini_parser import GeminiParser
 from tnstc_api.parsers.ollama_parser import OllamaParser
 from tnstc_api.schemas import BusService, SearchRequest
 from tnstc_api.tnstc_client import get_place_info
-from utils.logging_setup import setup_logging
+from utils.logger import setup_logging
 
 
 OUT_HTML_LOG = Path(__file__).with_name("retrieved_htmls.txt")

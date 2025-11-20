@@ -3,7 +3,7 @@ import logging
 import re
 from typing import List, Optional
 import httpx
-from utils.logging_setup import setup_logging
+from utils.logger import setup_logging
 from ..config import TNSTC_DETAILS_URL
 from ..schemas import TNSTCBusService
 

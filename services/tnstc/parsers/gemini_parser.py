@@ -7,7 +7,7 @@ from tenacity import Retrying, stop_after_attempt, wait_exponential
 from llm.gemini import GeminiLLM
 from llm.interface import LLMInterface
 from utils.helpers import minify_html
-from utils.logging_setup import setup_logging
+from utils.logger import setup_logging
 from ..schemas import TNSTCBusService
 from .base import AbstractBusParser
 
