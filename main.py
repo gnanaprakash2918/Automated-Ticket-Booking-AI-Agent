@@ -17,33 +17,31 @@ def create_app(service_name: str = "tnstc"):
     service_instance = None
 
     try:
-        # Dynamic Import of Service Modules
         config_module = importlib.import_module(f"services.{service_name}.config")
         service_module = importlib.import_module(f"services.{service_name}.service")
         schemas_module = importlib.import_module(f"services.{service_name}.schemas")
 
         logger.debug(f"Modules loaded for service '{service_name}'")
 
-        # Reflectively get classes
         ServiceClass = getattr(service_module, f"{service_name.upper()}Service")
         RequestSchema = getattr(schemas_module, f"{service_name.upper()}SearchRequest")
-        ResponseSchema = getattr(schemas_module, f"{service_name.upper()}BusSearchResponse")
+        ResponseSchema = getattr(
+            schemas_module, f"{service_name.upper()}BusSearchResponse"
+        )
         MetaSchema = getattr(schemas_module, f"{service_name.upper()}ResponseMetadata")
         AmbiguousPlaceError = getattr(service_module, "AmbiguousPlaceError", None)
 
-        # Load Config
         PARSER_STRATEGY = getattr(config_module, "PARSER_STRATEGY", "dynamic")
         GEMINI_MODEL = getattr(config_module, "GEMINI_MODEL", None)
         OLLAMA_MODEL = getattr(config_module, "OLLAMA_MODEL", None)
         APP_ENV = getattr(config_module, "APP_ENV", None)
 
-        # Instantiate Service
         service_instance = ServiceClass()
         logger.info(f"Service instance for '{service_name}' created successfully.")
 
-    except Exception as e:
+    except (ImportError, AttributeError) as e:
         logger.critical(f"Failed to load service modules for '{service_name}': {e}")
-        raise RuntimeError("Service Loading Failed")
+        raise RuntimeError(f"Service Loading Failed: {e}")
 
     async def startup_event():
         logger.info(f"Running startup event for service '{service_name}'")
@@ -81,9 +79,7 @@ def create_app(service_name: str = "tnstc"):
 
     @app.get("/places/search", tags=["Places"])
     async def search_places(query: str = Query(..., min_length=3)):
-        """
-        Search for places by name.
-        """
+        """Search for places by name."""
         logger.info(f"Place search endpoint hit for query: '{query}'")
         if hasattr(service_instance, "search_places"):
             places = await service_instance.search_places(query)
@@ -114,10 +110,8 @@ def create_app(service_name: str = "tnstc"):
                 f"{req.to_place_name} on {req.onward_date}"
             )
 
-            # Call service
             result = await service_instance.search_services(req, limit=limit)
 
-            # Unpack result
             if isinstance(result, tuple) and len(result) == 3:
                 services, from_place, to_place = result
             else:
@@ -132,12 +126,11 @@ def create_app(service_name: str = "tnstc"):
 
             meta = MetaSchema(
                 search_timestamp=start_time,
-                parser_strategy="dynamic",
-                total_services_found_before_filtering=len(services), # This logic might need adjustment if we want true pre-filter count, but for now it's consistent
+                parser_strategy=PARSER_STRATEGY,
+                total_services_found_before_filtering=len(services),
                 limit_applied=limit,
             )
 
-            # Fallback for places if service didn't return them
             if from_place is None:
                 from_place = {"id": "000", "code": "UNK", "name": req.from_place_name}
             if to_place is None:
@@ -156,11 +149,9 @@ def create_app(service_name: str = "tnstc"):
                 status.HTTP_422_UNPROCESSABLE_ENTITY, detail=ve.errors()
             )
         except Exception as e:
-            # Handle AmbiguousPlaceError
             if AmbiguousPlaceError and isinstance(e, AmbiguousPlaceError):
                 logger.warning(f"Ambiguous place error: {e}")
                 candidates = getattr(e, "candidates", []) or []
-                # Serialize candidates if they are Pydantic models
                 serialized_candidates = [
                     c.model_dump() if hasattr(c, "model_dump") else c.__dict__
                     for c in candidates
