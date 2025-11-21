@@ -15,15 +15,6 @@ class BeautifulSoupParser(AbstractBusParser):
     def extract_bus_htmls(self, html_content: str) -> List[str]:
         """
         Extract individual bus div HTML snippets for hybrid parsing strategy.
-
-        This method is used to pre-filter buses from the main HTML, which can then
-        be passed to LLM parsers to reduce token usage and improve performance.
-
-        Args:
-            html_content: The raw HTML string of the main search results page.
-
-        Returns:
-            List of HTML strings, one per bus div.
         """
         soup = BeautifulSoup(html_content, "lxml")
         bus_divs = soup.find_all("div", class_="bus-list")
@@ -32,20 +23,9 @@ class BeautifulSoupParser(AbstractBusParser):
         )
         return [str(div) for div in bus_divs]
 
-    def extract_bus_metadata(
-        self, bus_html: str, idx: int
-    ) -> Optional[Dict[str, Any]]:
+    def extract_bus_metadata(self, bus_html: str, idx: int) -> Optional[Dict[str, Any]]:
         """
         Extract basic metadata from bus HTML without expensive detail fetching.
-        Used for smart pre-filtering before LLM parsing to reduce costs.
-
-        Args:
-            bus_html: HTML string of a single bus div.
-            idx: Index of this bus in the original list.
-
-        Returns:
-            Dict with keys: idx, price_in_rs, departure_time, bus_type, html
-            Returns None if bus div cannot be parsed.
         """
         soup = BeautifulSoup(bus_html, "lxml")
         bus_div = soup.find("div", class_="bus-list")
@@ -89,24 +69,15 @@ class BeautifulSoupParser(AbstractBusParser):
     ) -> List[TNSTCBusService]:
         """
         Parse individual bus HTML snippets (hybrid parsing strategy).
-
-        Reconstructs full HTML with only the provided bus divs and uses
-        the existing parse method.
-
-        Args:
-            client: AsyncClient for sub-requests.
-            bus_html_list: List of HTML strings, each containing a single bus div.
-            limit: Optional limit on number of buses to parse.
-
-        Returns:
-            List of parsed TNSTCBusService objects.
         """
         logger.info(
             f"BeautifulSoupParser.parse_buses: Processing {len(bus_html_list)} "
             f"pre-filtered bus HTML snippets"
         )
 
-        # Reconstruct HTML with only the provided bus divs
+        if limit is not None and len(bus_html_list) > limit:
+            bus_html_list = bus_html_list[:limit]
+
         reconstructed_html = "\n".join(bus_html_list)
         return await self.parse(client, reconstructed_html, limit)
 
@@ -122,8 +93,14 @@ class BeautifulSoupParser(AbstractBusParser):
         temp_data_list = []
         bus_divs = soup.find_all("div", class_="bus-list")
 
+        if limit is not None and len(bus_divs) > limit:
+            logger.info(
+                f"BeautifulSoupParser: Limiting processing to first {limit} buses (found {len(bus_divs)})."
+            )
+            bus_divs = bus_divs[:limit]
+
         logger.info(
-            f"BeautifulSoupParser: Starting hybrid parse. Found {len(bus_divs)} bus elements."
+            f"BeautifulSoupParser: Starting hybrid parse. Processing {len(bus_divs)} bus elements."
         )
 
         # Scrape main list and prepare for sequential detail fetch
@@ -153,7 +130,7 @@ class BeautifulSoupParser(AbstractBusParser):
                 logger.error(f"Critical error in bs_parser (Pass 1) for bus {idx}: {e}")
                 temp_data_list.append(None)
 
-        # 3. Fetch detailed HTML SEQUENTIALLY to avoid server state race conditions
+        # 3. Fetch detailed HTML SEQUENTIALLY
         all_details_html = []
         logger.info(
             f"BeautifulSoupParser: Starting sequential detail fetch for {len(temp_data_list)} buses..."
@@ -172,7 +149,7 @@ class BeautifulSoupParser(AbstractBusParser):
                     )
                 all_details_html.append("")
 
-        # 4. Combine main list data with detail data using the new hybrid logic
+        # 4. Combine main list data with detail data
         for idx, details_html in enumerate(all_details_html):
             main_list_data = temp_data_list[idx]
             bus_div = bus_divs[idx]
@@ -186,7 +163,7 @@ class BeautifulSoupParser(AbstractBusParser):
                     bus_div, main_list_data.get("onclick_attr")
                 )
 
-                # 3. Create the final service_data using Main List as the BASE (Primary Source of Truth)
+                # 3. Create the final service_data using Main List as the BASE
                 service_data = {
                     "operator": fallback_data.get("operator", "N/A"),
                     "trip_code": fallback_data.get("trip_code", "N/A"),
@@ -204,10 +181,8 @@ class BeautifulSoupParser(AbstractBusParser):
                 total_kms = None
                 child_fare = None
 
-                # 4. Selectively merge details. strictly prohibiting overwrite of valid Primary data.
+                # 4. Selectively merge details
                 if parsed_details:
-                    # CRITICAL: These fields often differ in the Popup (Scheduled vs Actual).
-                    # We MUST prefer the Main List values if they exist.
                     primary_sot_fields = [
                         "trip_code",
                         "route_code",
@@ -220,15 +195,11 @@ class BeautifulSoupParser(AbstractBusParser):
                     for k, v in parsed_details.items():
                         if not v:
                             continue
-
-                        # If it's a Primary SOT field and we already have it from Main List, SKIP overwrite.
                         if k in primary_sot_fields:
                             current_val = service_data.get(k)
-                            # Check if current value is valid (not None, not 'N/A', not 0)
                             if current_val not in [None, "N/A", "", 0]:
                                 continue
 
-                        # Special handling for price string conversion from details
                         if k == "price_in_rs_str":
                             if service_data.get("price_in_rs", 0) == 0:
                                 try:
@@ -237,19 +208,19 @@ class BeautifulSoupParser(AbstractBusParser):
                                     pass
                             continue
 
-                        # Safe to update secondary fields (operator, total_kms, child_fare, etc.)
                         service_data[k] = v
 
                     total_kms = parsed_details.get("total_kms")
                     child_fare = parsed_details.get("child_fare", "NA")
 
                 logger.info(
-                    f"BS_Parser Bus {idx} MERGED: Operator: {service_data['operator']}, Trip Code: {service_data['trip_code']}, Final Price: {service_data['price_in_rs']}"
+                    f"BS_Parser Bus {idx} MERGED: Operator: {service_data['operator']}, Trip Code: {service_data['trip_code']}"
                 )
 
-                # 5. Append the final merged object
+                # 5. Append with explicit bus_number
                 bus_services.append(
                     TNSTCBusService(
+                        bus_number=idx + 1,  # Explicit sequential numbering
                         operator=service_data["operator"],
                         bus_type=main_list_data["bus_type"],
                         trip_code=service_data["trip_code"],
@@ -269,19 +240,10 @@ class BeautifulSoupParser(AbstractBusParser):
                 logger.error(f"Critical error in bs_parser (Pass 2) for bus {idx}: {e}")
                 continue
 
-        # Apply limit AFTER parsing all buses to avoid missing potential matches
-        if limit is not None and len(bus_services) > limit:
-            logger.info(
-                f"BeautifulSoupParser: Applying limit of {limit} to {len(bus_services)} parsed buses."
-            )
-            bus_services = bus_services[:limit]
-
         return bus_services
 
-    # Helpers
-
+    # Helpers (same as before)
     def _parse_seats(self, bus_div: Tag) -> int:
-        """Extracts available seats from the bus_div."""
         seats_available = 0
         seats_text_element_candidates = bus_div.find_all("span", class_="text-1")
         seats_text_element = next(
@@ -301,7 +263,6 @@ class BeautifulSoupParser(AbstractBusParser):
         return seats_available
 
     def _parse_via_route(self, bus_div: Tag) -> Optional[List[str]]:
-        """Extracts the 'via' route list from the bus_div."""
         via_route_list: Optional[List[str]] = None
         via_tag_candidates = [
             tag
@@ -322,11 +283,9 @@ class BeautifulSoupParser(AbstractBusParser):
                             for stop in route_string.split(",")
                             if stop.strip()
                         ]
-                        logger.debug(f"BS_Parser: Extracted via route: {via_route_list}")
         return via_route_list
 
     def _parse_details_from_trip_html(self, trip_html: str) -> Optional[Dict[str, Any]]:
-        """Helper to parse the detailed HTML from _call_load_trip_details."""
         if not trip_html:
             return None
         try:
@@ -351,27 +310,26 @@ class BeautifulSoupParser(AbstractBusParser):
             return None
 
     def _parse_details_from_bus_div(self, bus_div: Tag, onclick_attr: str = "") -> dict:
-        """Fallback helper to scrape data from the main list div."""
         data = {}
-
-        # 1. Operator
         op_el = bus_div.find("span", class_="operator-name")
         data["operator"] = op_el.text.strip() if op_el else "N/A"
 
-        # 2. Time Info
         time_divs = bus_div.find_all("div", class_="time-info")
-        data["departure_time"] = (
-            time_divs[0].find("span").get_text(strip=True)
-            if len(time_divs) > 0 and time_divs[0].find("span")
-            else "N/A"
-        )
-        data["arrival_time"] = (
-            time_divs[2].find("span").get_text(strip=True)
-            if len(time_divs) > 2 and time_divs[2].find("span")
-            else "N/A"
-        )
+        # Safely extract departure and arrival times: ensure the span exists before calling get_text
+        if len(time_divs) > 0:
+            dep_span = time_divs[0].find("span")
+            data["departure_time"] = (
+                dep_span.get_text(strip=True) if dep_span else "N/A"
+            )
+        else:
+            data["departure_time"] = "N/A"
 
-        # 3. Duration
+        if len(time_divs) > 2:
+            arr_span = time_divs[2].find("span")
+            data["arrival_time"] = arr_span.get_text(strip=True) if arr_span else "N/A"
+        else:
+            data["arrival_time"] = "N/A"
+
         dur_el = bus_div.find("span", class_="duration")
         data["duration"] = (
             dur_el.text.strip().replace("Hrs", "").strip()
@@ -379,7 +337,6 @@ class BeautifulSoupParser(AbstractBusParser):
             else "N/A"
         )
 
-        # 4. Price
         price = 0
         price_div = bus_div.find("div", class_="price")
         if price_div:
@@ -389,9 +346,8 @@ class BeautifulSoupParser(AbstractBusParser):
                 price = int(match.group(1))
         data["price_in_rs"] = price
 
-        # 5. Trip & Route Codes (Try JS first, then fallback to text)
         data["trip_code"], data["route_code"] = "N/A", "N/A"
-        
+
         if onclick_attr:
             try:
                 match = re.search(r"loadTripDetails\('([^']+)'", onclick_attr)
@@ -400,16 +356,19 @@ class BeautifulSoupParser(AbstractBusParser):
                     if len(args_list) >= 12:
                         data["trip_code"] = args_list[10].strip()
                         data["route_code"] = args_list[11].strip()
-                        return data # Success with JS
+                        return data
             except Exception:
-                pass # Fallback to text parsing
+                pass
 
-        # Fallback: Text parsing for codes
         code_span = next(
-            (s for s in bus_div.find_all("span", class_="text-1") if s.text and "/" in s.text),
-            None
+            (
+                s
+                for s in bus_div.find_all("span", class_="text-1")
+                if s.text and "/" in s.text
+            ),
+            None,
         )
-        
+
         if code_span:
             parts = list(code_span.stripped_strings)
             if len(parts) >= 3 and parts[1] == "/":
@@ -418,18 +377,18 @@ class BeautifulSoupParser(AbstractBusParser):
             else:
                 raw_parts = code_span.get_text().split("/", 1)
                 data["trip_code"] = raw_parts[0].strip()
-                data["route_code"] = raw_parts[1].strip() if len(raw_parts) > 1 else "N/A"
+                data["route_code"] = (
+                    raw_parts[1].strip() if len(raw_parts) > 1 else "N/A"
+                )
 
         return data
 
     def _parse_key_value_table(self, rows: list) -> Dict[str, str]:
-        """Parses <tr> elements into a key-value map."""
         details_map = {}
         for row in rows:
             label_cell = row.find("td", attrs={"class": "bodytextWithSecondMainColor"})
             value_cell = row.find("td", attrs={"class": "bodytextWithThirdMainColor"})
             if label_cell and value_cell:
-                # Sanitize key to handle 'Total Kms *' vs 'Total Kms'
                 label = (
                     label_cell.text.replace(":", "")
                     .replace("\xa0", " ")
@@ -441,14 +400,12 @@ class BeautifulSoupParser(AbstractBusParser):
         return details_map
 
     def _parse_fares(self, details_soup: BeautifulSoup, data: Dict[str, Any]) -> None:
-        """Finds the Adult and Child fares."""
         data["price_in_rs_str"] = self._find_fare_value(details_soup, r"Adult\s*Fare")
         data["child_fare"] = self._find_fare_value(details_soup, r"Child\s*Fare")
 
     def _find_fare_value(
         self, details_soup: BeautifulSoup, pattern_str: str
     ) -> Optional[str]:
-        """Nested helper to find a specific fare by its label pattern."""
         try:
             fare_pattern = re.compile(pattern_str, re.IGNORECASE)
             fare_label = details_soup.find(
@@ -476,7 +433,6 @@ class BeautifulSoupParser(AbstractBusParser):
     def _parse_stops_table(
         self, details_soup: BeautifulSoup, data: Dict[str, Any]
     ) -> None:
-        """Parses departure and arrival times from the stops table."""
         list_heading_tr = details_soup.find("tr", class_="listHeading")
         if not list_heading_tr:
             return

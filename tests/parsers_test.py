@@ -1,20 +1,19 @@
 import asyncio
 from datetime import datetime
-import logging
 from pathlib import Path
 import sys
 from typing import Any, Dict, List, Type
 import httpx
+from loguru import logger
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from rich.text import Text
 
 
-# Fix this shit before its too late : TODO
-_project_root = Path(__file__).resolve().parent.parent
-if str(_project_root) not in sys.path:
-    sys.path.insert(0, str(_project_root))
+# Ensure project root is in sys.path
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from test_config import (  # noqa: E402
     CRITICAL_FIELDS,
@@ -32,361 +31,231 @@ from services.tnstc.service import TNSTCService  # noqa: E402
 from utils.logger import setup_logging  # noqa: E402
 
 
-def load_service_module(service_name: str) -> Dict[str, Any]:
-    """
-    Dynamically load service module and return its components.
+# Configuration
+PARSERS_MAP: Dict[str, Type[AbstractBusParser]] = {
+    "beautifulsoup": BeautifulSoupParser,
+    "gemini": GeminiParser,
+    "ollama": OllamaParser,
+}
 
-    Args:
-        service_name: Name of the service to load (e.g., "tnstc", "redbus")
-
-    Returns:
-        Dictionary containing parsers, service class, and schemas
-    """
-    service_map = {
-        "tnstc": {
-            "parsers": {
-                "beautifulsoup": BeautifulSoupParser,
-                "gemini": GeminiParser,
-                "ollama": OllamaParser,
-            },
-            "service_class": TNSTCService,
-            "schema": TNSTCBusService,
-            "request_schema": TNSTCSearchRequest,
-        }
-        # Future: Add "redbus", "irctc" etc. here
-    }
-
-    if service_name not in service_map:
-        raise ValueError(
-            f"Unsupported service: {service_name}. "
-            f"Available services: {list(service_map.keys())}"
-        )
-
-    return service_map[service_name]
-
-
-service_config = load_service_module(TEST_SERVICE)
-PARSERS_MAP: Dict[str, Type[AbstractBusParser]] = service_config["parsers"]
-ServiceClass = service_config["service_class"]
-BusServiceSchema = service_config["schema"]
-RequestSchema = service_config["request_schema"]
-
-service_instance: TNSTCService = ServiceClass()
-
-test_data = SERVICE_TEST_DATA[TEST_SERVICE]
-TEST_REQUEST = RequestSchema(
-    from_place_name=test_data["from_place"],
-    to_place_name=test_data["to_place"],
-    onward_date=TEST_DATE,
-)
-
-now = datetime.now()
-timestamp = (
-    now.strftime("%Y%m%d_%I%M%S")
-    + f"{int(now.microsecond / 1000):03d}"
-    + now.strftime("%p").lower()
-)
-
-
-directory = Path(__file__).parent / "retrieved_htmls"
-directory.mkdir(exist_ok=True)
-
-OUT_HTML_LOG = directory / f"retrieved_htmls_{timestamp}.txt"
-
-log = logging.getLogger("ConsistencyTestRunner")
 console = Console()
+service_instance = TNSTCService()
+
+# Directory for saving debug HTML
+DEBUG_DIR = Path(__file__).parent / "retrieved_htmls"
+DEBUG_DIR.mkdir(exist_ok=True, parents=True)
 
 
-async def append_html_to_log(
-    lock: asyncio.Lock, name: str, html: str, out_path: Path = OUT_HTML_LOG
-) -> None:
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+async def fetch_live_html(client: httpx.AsyncClient) -> str:
+    """Orchestrates the service to fetch real HTML from TNSTC."""
+    console.print(f"[bold blue]Fetching live data for {TEST_SERVICE}...[/bold blue]")
 
-    async with lock:
-        with open(out_path, "a", encoding="utf-8") as fh:
-            fh.write(f"{name}\n")
-            fh.write(html)
-            fh.write("\n\n---HTML_BLOCK_END---\n\n")
+    test_data = SERVICE_TEST_DATA[TEST_SERVICE]
+    request = TNSTCSearchRequest(
+        from_place_name=test_data["from_place"],
+        to_place_name=test_data["to_place"],
+        onward_date=TEST_DATE,
+    )
 
+    await service_instance.initialize_db()
 
-def compare_service_fields(
-    service_a, service_b, parser_a: str, parser_b: str
-) -> Dict[str, Any]:
-    diffs = {}
+    # 1. Resolve Places
+    from_place = await service_instance._fetch_place_info(
+        request.from_place_name, is_from_place=True
+    )
+    to_place = await service_instance._fetch_place_info(
+        request.to_place_name, is_from_place=False
+    )
 
-    dict_a = service_a.model_dump(exclude_none=True, mode="json")
-    dict_b = service_b.model_dump(exclude_none=True, mode="json")
+    # 2. Construct Payload
+    payload = service_instance._construct_search_payload(from_place, to_place, request)
 
-    all_keys = set(dict_a.keys()) | set(dict_b.keys())
+    # 3. Request
+    url = f"{service_instance.base_url}?hiddenAction=SearchService"
+    response = await client.post(url, data=payload)
+    response.raise_for_status()
 
-    for key in all_keys:
-        val_a = dict_a.get(key)
-        val_b = dict_b.get(key)
+    # Save HTML for debugging
+    timestamp = datetime.now().strftime("%H%M%S")
+    with open(DEBUG_DIR / f"live_search_{timestamp}.html", "w", encoding="utf-8") as f:
+        f.write(response.text)
 
-        if val_a == val_b:
-            continue
-
-        if key == "price_in_rs" and val_a is not None and val_b is not None:
-            if abs(int(val_a) - int(val_b)) <= 1:
-                continue
-
-        if isinstance(val_a, list) and isinstance(val_b, list):
-            if set(val_a) == set(val_b):
-                continue
-
-        is_critical = key in CRITICAL_FIELDS
-        diffs[key] = {parser_a: val_a, parser_b: val_b, "critical": is_critical}
-    return diffs
+    return response.text
 
 
-def get_comparison_summary(
-    all_results: Dict[str, List[Any]],
-) -> List[Dict[str, Any]]:
-    bs_results = all_results.get("beautifulsoup", [])
-    summary = []
-
-    max_buses = len(bs_results)
-
-    for i in range(max_buses):
-        bus_summary = {
-            "index": i,
-            "reference_trip_code": bs_results[i].trip_code
-            if i < len(bs_results)
-            else "N/A",
-            "bs_service": bs_results[i] if i < len(bs_results) else None,
-            "comparisons": {},
-        }
-
-        for other_parser_name, other_results in all_results.items():
-            if other_parser_name == "beautifulsoup":
-                continue
-
-            if i < len(other_results):
-                other_service = other_results[i]
-                diffs = compare_service_fields(
-                    bs_results[i], other_service, "beautifulsoup", other_parser_name
-                )
-                bus_summary["comparisons"][other_parser_name] = {
-                    "diffs": diffs,
-                    "service": other_service,
-                    "consistent": not bool(diffs),
-                }
-            else:
-                bus_summary["comparisons"][other_parser_name] = {
-                    "diffs": {
-                        "count": f"Missing (BS={max_buses}, {other_parser_name}={len(other_results)})"
-                    },
-                    "service": None,
-                    "consistent": False,
-                }
-
-        summary.append(bus_summary)
-
-    return summary
-
-
-async def run_parser(
-    parser_name: str,
+async def run_parser_safe(
+    name: str,
+    parser_cls: Type[AbstractBusParser],
     client: httpx.AsyncClient,
-    html_content: str,
+    html: str,
     limit: int,
-    write_lock: asyncio.Lock,
-) -> List[Any]:
+) -> List[TNSTCBusService]:
+    """Runs a parser safely and handles exceptions."""
+    console.print(
+        f"   -> Running [bold magenta]{name}[/bold magenta] parser (Limit: {limit})..."
+    )
     try:
-        await append_html_to_log(write_lock, f"{parser_name}.html", html_content)
-
-        ParserClass = PARSERS_MAP[parser_name]
-        parser = ParserClass()
-        return await parser.parse(client, html_content, limit)
-    except Exception as e:
-        log.error(f"FATAL ERROR in {parser_name} parser execution: {e}", exc_info=True)
+        parser = parser_cls()
+        results = await parser.parse(client, html, limit=limit)
+        return results
+    except Exception:
+        logger.exception(f"Parser {name} failed")
         return []
+
+
+def normalize_value(val: Any) -> str:
+    """Normalizes values for comparison (strips whitespace, handles None)."""
+    if val is None:
+        return "N/A"
+    return str(val).strip()
 
 
 async def main_test_runner():
     setup_logging()
-    write_lock = asyncio.Lock()
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        await service_instance.initialize_db()
-
+    async with httpx.AsyncClient(timeout=45.0) as client:
+        # 1. Get Data
         try:
-            from_place = await service_instance._fetch_place_info(
-                TEST_REQUEST.from_place_name, is_from_place=True
-            )
-            to_place = await service_instance._fetch_place_info(
-                TEST_REQUEST.to_place_name, is_from_place=False
-            )
-
-            # Use the new helper method to construct payload
-            payload = service_instance._construct_search_payload(
-                from_place, to_place, TEST_REQUEST
-            )
-
-            initial_search_url = (
-                "https://www.tnstc.in/OTRSOnline/jqreq.do?hiddenAction=SearchService"
-            )
-            response = await client.post(initial_search_url, data=payload)
-            response.raise_for_status()
-            initial_html = response.text
-
-            await append_html_to_log(write_lock, "initial_search.html", initial_html)
-
-            log.info(
-                f"Successfully fetched initial search HTML. Starting concurrent parsing for {LIMIT_BUSES} buses."
-            )
-
+            html_content = await fetch_live_html(client)
         except Exception as e:
-            log.critical(f"Initial setup/network failure. Cannot run tests: {e}")
-            console.print(
-                Panel(
-                    f"[bold red]CRITICAL SETUP FAILURE:[/bold red] {e}",
-                    title="Test Aborted",
-                )
-            )
+            console.print(f"[bold red]Failed to fetch HTML:[/bold red] {e}")
             return
 
-        parser_tasks = {
-            name: run_parser(name, client, initial_html, LIMIT_BUSES, write_lock)
-            for name in PARSERS_MAP.keys()
-        }
+        # 2. Run All Parsers
+        results: Dict[str, List[TNSTCBusService]] = {}
 
-        all_results = await asyncio.gather(
-            *parser_tasks.values(), return_exceptions=False
-        )
-        all_results = dict(zip(parser_tasks.keys(), all_results))
-
-    summary = get_comparison_summary(all_results)
-
-    console.rule("[bold yellow]Parser Consistency Check Results[/bold yellow]")
-    log.info(f"Consistency check completed for {len(summary)} bus services.")
-
-    overall_consistent_count = 0
-
-    for bus in summary:
-        ref_trip = bus["reference_trip_code"]
-        bs_service = bus["bs_service"]
-
-        if bs_service is None:
-            console.print(
-                Panel(
-                    f"[red]Bus {bus['index']} (Ref: N/A):[/red] BeautifulSoup failed to extract this service.",
-                    style="bold red",
-                )
+        for name, cls in PARSERS_MAP.items():
+            results[name] = await run_parser_safe(
+                name, cls, client, html_content, LIMIT_BUSES
             )
-            log.warning(f"Bus {bus['index']}: BS service is None.")
-            continue
 
-        bus_table = Table(
-            title=f"[bold cyan]Bus #{bus['index'] + 1}[/bold cyan] | Trip Code: [bold green]{ref_trip}[/bold green] | Type: {bs_service.bus_type}",
-            show_header=True,
-            header_style="bold magenta",
-            show_footer=False,
-            box=None,
+    # 3. Validate Limits and counts
+    console.rule("[bold yellow]Limit & Count Validation[/bold yellow]")
+
+    bs_results = results.get("beautifulsoup", [])
+    if not bs_results:
+        console.print(
+            "[bold red]CRITICAL: BeautifulSoup returned 0 results. Aborting comparison.[/bold red]"
         )
-        bus_table.add_column("Field", style="bold yellow")
-        bus_table.add_column("BS Reference", style="bold white")
-        bus_table.add_column("Comparison Details", justify="left", min_width=50)
+        return
 
-        is_bus_fully_consistent = True
+    for name, items in results.items():
+        count = len(items)
+        style = "green" if count <= LIMIT_BUSES and count > 0 else "red"
+        console.print(
+            f"Parser [bold]{name}[/bold]: Found [{style}]{count}[/{style}] buses (Limit was {LIMIT_BUSES})"
+        )
 
-        all_fields = list(BusServiceSchema.model_fields.keys())
+    # 4. Detailed Comparison
+    console.rule("[bold yellow]Consistency Analysis[/bold yellow]")
+
+    # Track overall stats
+    stats = {
+        name: {"match": 0, "mismatch": 0, "missing": 0}
+        for name in results
+        if name != "beautifulsoup"
+    }
+
+    for idx, ref_service in enumerate(bs_results):
+        trip_code = ref_service.trip_code
+
+        # Create a row for this bus
+        bus_panel_title = f"Bus #{ref_service.bus_number} | Code: {trip_code} | {ref_service.operator}"
+
+        table = Table(box=None, padding=(0, 1), show_header=True)
+        table.add_column("Field", style="dim")
+        table.add_column("BS (Ref)", style="bold white")
+
+        other_parsers = [p for p in results.keys() if p != "beautifulsoup"]
+        for p in other_parsers:
+            table.add_column(p.title())
+
+        # Find matching service in other parsers
+        matches = {}
+        has_diff = False
+
+        for p_name in other_parsers:
+            # Try finding by trip_code first
+            p_items = results.get(p_name, [])
+            match = next((x for x in p_items if x.trip_code == trip_code), None)
+
+            # Fallback: index matching
+            if (
+                not match
+                and idx < len(p_items)
+                and (trip_code == "N/A" or p_items[idx].trip_code == "N/A")
+            ):
+                match = p_items[idx]
+
+            matches[p_name] = match
+
+        # Compare Fields
+        # FIX: Use class access for model_fields to avoid Pydantic warning
+        all_fields = [
+            f
+            for f in TNSTCBusService.model_fields.keys()
+            if f not in ["llm_reasoning", "metadata"]
+        ]
 
         for field in all_fields:
-            if field in ["llm_reasoning", "explanation"]:
-                continue
+            ref_val = normalize_value(getattr(ref_service, field))
+            row_cells = [field, ref_val]
+            field_has_issue = False
 
-            bs_val = getattr(bs_service, field, None)
+            for p_name in other_parsers:
+                target = matches[p_name]
+                if not target:
+                    row_cells.append("[red]MISSING[/red]")
+                    field_has_issue = True
+                    continue
 
-            gemini_comp = bus["comparisons"].get("gemini", {})
-            ollama_comp = bus["comparisons"].get("ollama", {})
+                target_val = normalize_value(getattr(target, field))
 
-            gemini_diffs = gemini_comp.get("diffs", {})
-            ollama_diffs = ollama_comp.get("diffs", {})
+                if field == "price_in_rs":
+                    try:
+                        if abs(float(ref_val) - float(target_val)) < 1.0:
+                            row_cells.append(f"[green]{target_val}[/green]")
+                            continue
+                    except ValueError:
+                        pass
 
-            gemini_service = gemini_comp.get("service")
-            ollama_service = ollama_comp.get("service")
+                if target_val == ref_val:
+                    row_cells.append(f"[green]{target_val}[/green]")
+                else:
+                    style = "bold red" if field in CRITICAL_FIELDS else "yellow"
+                    row_cells.append(f"[{style}]{target_val}[/{style}]")
+                    field_has_issue = True
 
-            gemini_val = (
-                getattr(gemini_service, field, "N/A (Parse Fail)")
-                if gemini_service
-                else "N/A (No Service)"
-            )
-            ollama_val = (
-                getattr(ollama_service, field, "N/A (Parse Fail)")
-                if ollama_service
-                else "N/A (No Service)"
-            )
+            if field_has_issue:
+                has_diff = True
+                table.add_row(*row_cells)
 
-            has_diff = field in gemini_diffs or field in ollama_diffs
+        # Update stats
+        for p_name in other_parsers:
+            if not matches[p_name]:
+                stats[p_name]["missing"] += 1
 
-            if has_diff:
-                is_bus_fully_consistent = False
-                field_style = "bold red" if field in CRITICAL_FIELDS else "bold orange3"
-
-                diff_table = Table(box=None, show_header=False, padding=(0, 1))
-                diff_table.add_column("Parser", style="dim", justify="right")
-                diff_table.add_column("Reported Value", justify="left")
-
-                g_style = "red" if field in gemini_diffs else "green"
-                diff_table.add_row(
-                    Text("Gemini", style=g_style), Text(str(gemini_val), style=g_style)
-                )
-
-                o_style = "red" if field in ollama_diffs else "green"
-                diff_table.add_row(
-                    Text("Ollama", style=o_style), Text(str(ollama_val), style=o_style)
-                )
-
-                comparison_content = diff_table
-            else:
-                field_style = "bold white"
-
-                comparison_content = Text(str(gemini_val), style="green")
-
-            bus_table.add_row(
-                Text(field, style=field_style), str(bs_val), comparison_content
-            )
-
-        console.print(Panel(bus_table, border_style="bold cyan"))
-
-        if is_bus_fully_consistent:
-            overall_consistent_count += 1
+        if has_diff:
             console.print(
-                Text(
-                    f"--> Bus {ref_trip}: Fully consistent across all parsers.",
-                    style="bold green",
+                Panel(
+                    table,
+                    title=f"[yellow]{bus_panel_title}[/yellow]",
+                    border_style="yellow",
                 )
             )
-            log.info(f"Bus {ref_trip}: Fully consistent.")
         else:
-            console.print(
-                Text(
-                    f"--> Bus {ref_trip}: Differences found (highlighted in red).",
-                    style="bold red",
-                )
-            )
-            log.warning(
-                f"Bus {ref_trip}: Inconsistent results detected. Diffs: {bus['comparisons']}"
-            )
+            console.print(f"[green]✔ {bus_panel_title} - Fully Consistent[/green]")
 
-        console.print("\n")
-
-    final_panel_style = (
-        "bold green" if overall_consistent_count == len(summary) else "bold yellow"
-    )
-    console.print(
-        Panel(
-            f"Processed {len(summary)} services.\n"
-            f"Services with full consistency: [b]{overall_consistent_count}[/b] / {len(summary)}",
-            title="[bold blue]Overall Test Summary[/bold blue]",
-            style=final_panel_style,
-        )
-    )
-    log.info(
-        f"Overall Test Summary: {overall_consistent_count} / {len(summary)} services fully consistent."
-    )
+    console.rule("[bold blue]Summary[/bold blue]")
+    for p_name in other_parsers:
+        missing = stats[p_name]["missing"]
+        total = len(bs_results)
+        found = total - missing
+        console.print(f"{p_name.title()}: Found {found}/{total} matching buses.")
 
 
 if __name__ == "__main__":
-    asyncio.run(main_test_runner())
+    try:
+        asyncio.run(main_test_runner())
+    except KeyboardInterrupt:
+        console.print("[red]Test interrupted by user.[/red]")

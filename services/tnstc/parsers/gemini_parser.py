@@ -14,26 +14,19 @@ from .base import AbstractBusParser
 class GeminiParser(AbstractBusParser):
     """
     Implements the BusParser interface using the GeminiLLM adapter.
-    Fully utilizes LLMInterface for prompt loading and construction.
     """
 
     def __init__(self):
         try:
             logger.info("Initializing GeminiParser with LLMFactory...")
             from llm.factory import LLMFactory
-            
-            # Use factory to get the configured LLM (defaults to Gemini if not set)
+
             self.llm: LLMInterface = LLMFactory.create_llm(
-                provider="gemini", 
-                prompt_dir="services/tnstc/prompts"
+                provider="gemini", prompt_dir="services/tnstc/prompts"
             )
 
             self.system_prompt = self.llm.construct_system_prompt(
                 schema=TNSTCBusService, filename="system_prompt.txt"
-            )
-
-            logger.debug(
-                f"System prompt loaded (length={len(self.system_prompt)} chars)"
             )
 
             self.total_requests = 0
@@ -49,10 +42,8 @@ class GeminiParser(AbstractBusParser):
         self, main_list_html: str, detail_table_html: str, bus_index: int
     ) -> Optional[TNSTCBusService]:
         """
-        Parses a single bus.
-        Uses LLMInterface.construct_user_prompt to merge HTML into the template.
+        Parses a single bus using LLM.
         """
-
         logger.debug(
             f"Bus {bus_index}: Constructing user prompt "
             f"(main_html_len={len(main_list_html)}, detail_html_len={len(detail_table_html)})"
@@ -63,10 +54,6 @@ class GeminiParser(AbstractBusParser):
                 main_html=main_list_html,
                 detail_html=detail_table_html,
                 filename="user_prompt.txt",
-            )
-
-            logger.debug(
-                f"Bus {bus_index}: User prompt constructed (length={len(user_prompt)} chars)"
             )
 
         except FileNotFoundError as e:
@@ -94,15 +81,7 @@ class GeminiParser(AbstractBusParser):
                         system_prompt=self.system_prompt,
                     )
 
-                    logger.debug(
-                        f"Bus {bus_index}: LLM parsing succeeded on attempt "
-                        f"{attempt.retry_state.attempt_number}"
-                    )
-
-                    # Add delay to respect rate limits (10 req/min = 1 req every 6s)
                     await asyncio.sleep(GEMINI_RATE_LIMIT_DELAY)
-                    logger.debug(f"Bus {bus_index}: Rate limit delay completed")
-
                     return bus_service
 
                 except Exception as e:
@@ -119,26 +98,11 @@ class GeminiParser(AbstractBusParser):
         detail_table_html: str,
         idx: int,
     ) -> Optional[TNSTCBusService]:
-        """
-        Wrapper to strictly limit concurrent Gemini requests using a Semaphore.
-        Prevents hitting Gemini API rate limits.
-        """
-
         async with semaphore:
-            logger.debug(
-                f"GeminiParser: [SEMAPHORE ACQUIRED] Bus {idx}. "
-                f"Active slots: {GEMINI_CONCURRENCY_LIMIT - semaphore._value}"
-            )
-
             try:
                 result = await self._parse_bus_with_llm(
                     main_list_html, detail_table_html, idx
                 )
-
-                logger.debug(
-                    f"GeminiParser: Bus {idx} parsing completed under semaphore."
-                )
-
                 return result
             finally:
                 logger.debug(f"GeminiParser: [SEMAPHORE RELEASED] Bus {idx}.")
@@ -149,37 +113,23 @@ class GeminiParser(AbstractBusParser):
         bus_html_list: List[str],
         limit: Optional[int] = None,
     ) -> List[TNSTCBusService]:
-        """
-        Parse pre-filtered bus HTML snippets (hybrid parsing strategy).
-
-        This is more efficient than parse() as bus discovery is already done
-        by BeautifulSoupParser, reducing redundant HTML processing.
-
-        Args:
-            client: AsyncClient for sub-requests.
-            bus_html_list: List of HTML strings, each containing a single bus div.
-            limit: Optional limit on number of buses to parse.
-
-        Returns:
-            List of parsed TNSTCBusService objects.
-        """
         logger.info(
             f"GeminiParser.parse_buses: Processing {len(bus_html_list)} "
             f"pre-filtered bus HTML snippets"
         )
 
-        semaphore = asyncio.Semaphore(GEMINI_CONCURRENCY_LIMIT)
+        if limit is not None and len(bus_html_list) > limit:
+            logger.info(f"GeminiParser: Limiting processing to first {limit} items.")
+            bus_html_list = bus_html_list[:limit]
 
-        # Each HTML snippet is already a single bus div
+        semaphore = asyncio.Semaphore(GEMINI_CONCURRENCY_LIMIT)
         all_details_html = []
+
         for idx, bus_html in enumerate(bus_html_list):
             soup = BeautifulSoup(bus_html, "lxml")
             bus_div = soup.find("div", class_="bus-list")
 
             if not bus_div:
-                logger.warning(
-                    f"GeminiParser Bus {idx}: No bus-list div found in snippet"
-                )
                 all_details_html.append("")
                 continue
 
@@ -189,29 +139,17 @@ class GeminiParser(AbstractBusParser):
             onclick_attr = a_tag.get("onclick", "") if a_tag else ""
 
             if onclick_attr:
-                logger.debug(f"Bus {idx}: Fetching trip details...")
                 detail_html = await self._call_load_trip_details(
                     client, str(onclick_attr), idx
                 )
-                logger.debug(
-                    f"Bus {idx}: Details loaded (length={len(detail_html)} chars)"
-                )
                 all_details_html.append(detail_html)
             else:
-                logger.warning(f"Bus {idx}: No onclick attribute found")
                 all_details_html.append("")
 
-        # Parse with LLM
         parsing_tasks = []
         for idx, bus_html in enumerate(bus_html_list):
             main_clean = minify_html(bus_html)
             detail_clean = minify_html(all_details_html[idx])
-
-            logger.debug(
-                f"GeminiParser: Enqueuing bus {idx} for LLM parsing "
-                f"(main_len={len(main_clean)}, detail_len={len(detail_clean)})"
-            )
-
             parsing_tasks.append(
                 self._wrapper_parse_chunk(semaphore, main_clean, detail_clean, idx)
             )
@@ -219,92 +157,63 @@ class GeminiParser(AbstractBusParser):
         logger.info(
             f"GeminiParser: Awaiting LLM results for {len(parsing_tasks)} buses..."
         )
-
         results = await asyncio.gather(*parsing_tasks, return_exceptions=True)
 
         bus_services = []
+        current_bus_num = 1
         for idx, res in enumerate(results):
             if isinstance(res, TNSTCBusService):
-                logger.debug(f"Bus {idx}: Parsed successfully into TNSTCBusService.")
+                res.bus_number = current_bus_num
                 bus_services.append(res)
+                current_bus_num += 1
             elif isinstance(res, Exception):
                 logger.error(f"Bus {idx}: Parsing Error: {res}")
             else:
-                logger.error(
-                    f"Bus {idx}: Unexpected result type from parsing: {type(res)}"
-                )
+                logger.error(f"Bus {idx}: Unexpected result type: {type(res)}")
 
         logger.info(
-            f"GeminiParser.parse_buses: Completed. "
-            f"{len(bus_services)}/{len(bus_html_list)} parsed successfully."
+            f"GeminiParser.parse_buses: Completed. {len(bus_services)} parsed successfully."
         )
-
-        # Apply limit
-        if limit is not None and len(bus_services) > limit:
-            logger.info(
-                f"GeminiParser: Applying limit of {limit} to {len(bus_services)} parsed buses."
-            )
-            bus_services = bus_services[:limit]
-
         return bus_services
 
     async def parse(
         self, client: httpx.AsyncClient, html_content: str, limit: Optional[int] = None
     ) -> List[TNSTCBusService]:
-        """
-        Orchestration: Finds divs, fetches details, parses concurrently (throttled).
-        """
-
         logger.info(
             f"Using GeminiParser (Interface Loader strategy). "
             f"Concurrency Limit: {GEMINI_CONCURRENCY_LIMIT}"
         )
 
         semaphore = asyncio.Semaphore(GEMINI_CONCURRENCY_LIMIT)
-
         soup = BeautifulSoup(html_content, "lxml")
         bus_divs = soup.find_all("div", class_="bus-list")
-        logger.debug(f"Found {len(bus_divs)} 'div.bus-list' elements in HTML.")
 
         if not bus_divs:
-            logger.warning("GeminiParser: No 'div.bus-list' elements found.")
             return []
+
+        if limit is not None and len(bus_divs) > limit:
+            logger.info(f"GeminiParser: Limiting processing to first {limit} buses.")
+            bus_divs = bus_divs[:limit]
 
         all_details_html = []
         for idx, bus_div in enumerate(bus_divs):
-            logger.debug(f"Bus {idx}: Extracting onclick attribute for trip details...")
             a_tag = bus_div.find(
                 "a", attrs={"data-target": "#TripcodePopUp", "onclick": True}
             )
             onclick_attr = a_tag.get("onclick", "") if a_tag else ""
 
             if onclick_attr:
-                logger.debug(f"Bus {idx}: Found onclick attribute, fetching details...")
                 detail_html = await self._call_load_trip_details(
                     client, str(onclick_attr), idx
                 )
-
-                logger.debug(
-                    f"Bus {idx}: Loaded details HTML (length={len(detail_html)} chars)"
-                )
-
                 all_details_html.append(detail_html)
             else:
-                logger.warning(
-                    f"Bus {idx}: No onclick attribute found; skipping details."
-                )
                 all_details_html.append("")
 
         parsing_tasks = []
         for idx, bus_div in enumerate(bus_divs):
             main_clean = minify_html(str(bus_div))
             detail_clean = minify_html(all_details_html[idx])
-
-            logger.debug(
-                f"GeminiParser: Enqueuing bus {idx} for LLM parsing "
-                f"(main_len={len(main_clean)}, detail_len={len(detail_clean)})"
-            )
-
             parsing_tasks.append(
                 self._wrapper_parse_chunk(semaphore, main_clean, detail_clean, idx)
             )
@@ -312,28 +221,19 @@ class GeminiParser(AbstractBusParser):
         logger.info(
             f"GeminiParser: Awaiting LLM results for {len(parsing_tasks)} buses..."
         )
-
         results = await asyncio.gather(*parsing_tasks, return_exceptions=True)
 
         bus_services = []
+        current_bus_num = 1
         for idx, res in enumerate(results):
             if isinstance(res, TNSTCBusService):
-                logger.debug(f"Bus {idx}: Parsed successfully into TNSTCBusService.")
+                res.bus_number = current_bus_num
                 bus_services.append(res)
+                current_bus_num += 1
             elif isinstance(res, Exception):
                 logger.error(f"Bus {idx}: Parsing Error: {res}")
-            else:
-                logger.error(
-                    f"Bus {idx}: Unexpected result type from parsing: {type(res)}"
-                )
 
         logger.info(
-            f"GeminiParser: Completed. {len(bus_services)}/{len(bus_divs)} parsed successfully."
+            f"GeminiParser: Completed. {len(bus_services)} parsed successfully."
         )
-
-        # Apply limit AFTER parsing all buses to avoid missing potential matches
-        if limit is not None and len(bus_services) > limit:
-            logger.info(f"GeminiParser: Applying limit of {limit} to {len(bus_services)} parsed buses.")
-            bus_services = bus_services[:limit]
-
         return bus_services
