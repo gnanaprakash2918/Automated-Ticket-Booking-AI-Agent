@@ -7,10 +7,6 @@ from llm.interface import LLMInterface, T
 
 
 class GeminiLLM(LLMInterface):
-    """
-    Adapter for Gemini
-    """
-
     def __init__(
         self,
         model_name: Optional[str] = None,
@@ -36,7 +32,9 @@ class GeminiLLM(LLMInterface):
 
     async def generate(self, prompt: str, **kwargs: Any) -> str:
         try:
-            logger.debug(f"Generating text with prompt: {prompt}")
+            debug_prompt = prompt[:100] + "..." if len(prompt) > 100 else prompt
+            logger.debug(f"Generating text with prompt: {debug_prompt}")
+
             response = await self.llm.ainvoke(prompt)
             content = getattr(response, "content", str(response))
 
@@ -50,10 +48,10 @@ class GeminiLLM(LLMInterface):
         self, schema: Type[T], prompt: str, system_prompt: str = "", **kwargs: Any
     ) -> T:
         try:
-            logger.debug(f"Generating structured output with prompt: {prompt}")
-            structured_llm = self.llm.with_structured_output(schema)
+            debug_prompt = prompt[:100] + "..." if len(prompt) > 100 else prompt
+            logger.debug(f"Generating structured output with prompt: {debug_prompt}")
 
-            logger.debug("Invoking structured LLM")
+            structured_llm = self.llm.with_structured_output(schema)
 
             messages = []
             if system_prompt:
@@ -61,7 +59,6 @@ class GeminiLLM(LLMInterface):
 
             messages.append(HumanMessage(content=prompt))
 
-            logger.debug(f"Structured messages prepared: {messages}")
             result = await structured_llm.ainvoke(messages)
             return cast(T, result)
 
