@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import Any, Dict, List, NamedTuple, Optional
+from typing import Any, Dict, List, NamedTuple, Optional, Set
 import aiosqlite
 from loguru import logger
 
@@ -23,7 +23,7 @@ async def init_db_connection():
 
 class MigrationManager:
     def __init__(self, service_name: str, migrations_dir: str):
-        self.service_name = service_name
+        self.service_name = service_name.lower()
         self.db_path = DB_PATH
         self.migrations_dir = Path(migrations_dir)
 
@@ -51,6 +51,8 @@ class MigrationManager:
             logger.warning(f"Migration directory missing: {self.migrations_dir}")
             return []
 
+        seen_versions: Set[int] = set()
+
         for file in sorted(os.listdir(self.migrations_dir)):
             if not file.endswith(".sql") or not file.startswith("V"):
                 continue
@@ -61,6 +63,14 @@ class MigrationManager:
                     continue
 
                 version = int(version_str)
+
+                if version in seen_versions:
+                    logger.error(
+                        f"Duplicate migration version found: {version} in {file}"
+                    )
+                    continue
+
+                seen_versions.add(version)
                 description = parts[1].replace(".sql", "").replace("_", " ")
 
                 with open(self.migrations_dir / file, "r", encoding="utf-8") as f:
@@ -75,6 +85,7 @@ class MigrationManager:
 
     async def migrate(self):
         """Applies new migrations in a transaction."""
+
         await init_db_connection()
         file_migrations = self._load_migrations_from_files()
 
@@ -100,7 +111,6 @@ class MigrationManager:
                 logger.info(f"Applying Migration V{mig.version}: {mig.description}")
                 try:
                     await db.executescript(mig.script)
-
                     await db.execute(
                         "INSERT INTO schema_version (service_name, version, description, script_name, success) VALUES (?, ?, ?, ?, ?)",
                         (
@@ -126,7 +136,6 @@ class MigrationManager:
                             False,
                         ),
                     )
-
                     await db.commit()
                     raise e
 
@@ -134,9 +143,8 @@ class MigrationManager:
 async def get_place_from_cache(
     service_name: str, place_name: str
 ) -> Optional[Dict[str, Any]]:
-    """
-    Retrieves a place from the service-specific cache table.
-    """
+    """Retrieves a place from the service-specific cache table."""
+
     table_name = f"{service_name.lower()}_places"
     if not DB_PATH.exists():
         return None
@@ -144,7 +152,6 @@ async def get_place_from_cache(
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         try:
-            # Case-insensitive lookup
             cursor = await db.execute(
                 f"SELECT * FROM {table_name} WHERE place_name = ? COLLATE NOCASE",
                 (place_name,),
@@ -157,14 +164,12 @@ async def get_place_from_cache(
 
 
 async def save_place_to_cache(service_name: str, data: Dict[str, Any]):
-    """
-    Saves or updates a place in the service-specific cache table.
-    """
+    """Saves or updates a place in the service-specific cache table."""
+
     table_name = f"{service_name.lower()}_places"
     if not data:
         return
 
-    # Ensure we have the required fields
     if "place_name" not in data:
         logger.error("Cannot cache place without 'place_name'")
         return
@@ -187,9 +192,8 @@ async def save_place_to_cache(service_name: str, data: Dict[str, Any]):
 async def search_places_in_cache(
     service_name: str, query: str, limit: int = 10
 ) -> List[Dict[str, Any]]:
-    """
-    Searches for places in the cache matching the query string (partial match).
-    """
+    """Searches for places in the cache matching the query string (partial match)."""
+
     table_name = f"{service_name.lower()}_places"
     if not DB_PATH.exists():
         return []
@@ -197,7 +201,6 @@ async def search_places_in_cache(
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         try:
-            # LIKE query for partial matches
             search_pattern = f"%{query}%"
             cursor = await db.execute(
                 f"SELECT * FROM {table_name} WHERE place_name LIKE ? ORDER BY place_name LIMIT ?",
