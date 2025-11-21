@@ -6,10 +6,6 @@ from llm.interface import LLMInterface, T
 
 
 class OllamaLLM(LLMInterface):
-    """
-    Async Ollama adapter.
-    """
-
     def __init__(
         self,
         model_name: Optional[str] = None,
@@ -36,7 +32,8 @@ class OllamaLLM(LLMInterface):
             raise RuntimeError(f"Failed to construct Ollama AsyncClient: {e}") from e
 
     async def generate(self, prompt: str, **kwargs: Any) -> str:
-        logger.debug(f"Ollama generating text for prompt (length={len(prompt)} chars)")
+        debug_prompt = prompt[:100] + "..." if len(prompt) > 100 else prompt
+        logger.debug(f"Ollama generating text for prompt: {debug_prompt}")
 
         try:
             resp = await self.client.chat(
@@ -46,10 +43,6 @@ class OllamaLLM(LLMInterface):
             )
 
             content = resp.get("message", {}).get("content")
-            logger.debug(
-                f"Ollama raw response content length: {len(str(content)) if content else 0}"
-            )
-
             return str(content) if content else ""
         except Exception as e:
             logger.error(f"Ollama generation failed: {e}")
@@ -65,12 +58,7 @@ class OllamaLLM(LLMInterface):
         )
 
         try:
-            logger.debug("Sending prompt to Ollama...")
             response_text = await self.generate(full_prompt, **kwargs)
-            logger.debug(
-                f"Received response (length={len(response_text)} chars). Parsing JSON..."
-            )
-
             return self.parse_json_response(response_text, schema)
 
         except Exception as e:
