@@ -1,19 +1,25 @@
 import os
+from typing import Literal, Optional, cast
 from dotenv import load_dotenv
-from typing import Literal, Optional
+
 
 load_dotenv()
 
 # "production" in your deployment environment
 APP_ENV: str = os.getenv("APP_ENV", "development")
 
+# Directory to store log files
 LOG_DIR: str = "logs"
 
-TNSTC_BASE_URL: str = os.getenv('TNSTC_BASE_URL', 'https://www.tnstc.in/OTRSOnline/jqreq.do?')
+TNSTC_BASE_URL: str = os.getenv(
+    "TNSTC_BASE_URL", "https://www.tnstc.in/OTRSOnline/jqreq.do?"
+)
 TNSTC_DETAILS_URL: str = "https://www.tnstc.in/OTRSOnline/advanceNewBooking.do"
 
 ParserStrategy = Literal["beautifulsoup", "gemini", "ollama"]
-PARSER_STRATEGY: ParserStrategy = os.getenv("PARSER_STRATEGY", "beautifulsoup") # type: ignore
+PARSER_STRATEGY: ParserStrategy = cast(
+    ParserStrategy, os.getenv("PARSER_STRATEGY", "beautifulsoup")
+)
 
 GEMINI_API_KEY: Optional[str] = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-preview-09-2025")
@@ -23,7 +29,11 @@ OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama3:8b")
 OLLAMA_API_URL: str = f"{OLLAMA_BASE_URL}/api/generate"
 
-OLLAMA_CONCURRENCY_LIMIT: int = int(os.getenv("OLLAMA_CONCURRENCY_LIMIT", "5"))
+OLLAMA_CONCURRENCY_LIMIT: int = int(os.getenv("OLLAMA_CONCURRENCY_LIMIT", "1"))
+GEMINI_CONCURRENCY_LIMIT: int = int(os.getenv("GEMINI_CONCURRENCY_LIMIT", "1"))
 
-OLLAMA_LOAD_TIMEOUT: int = int(os.getenv("OLLAMA_LOAD_TIMEOUT", "200"))
-GEMINI_LOAD_TIMEOUT: int = int(os.getenv("GEMINI_LOAD_TIMEOUT", "200"))
+OLLAMA_LOAD_TIMEOUT: int = int(os.getenv("OLLAMA_LOAD_TIMEOUT", "400"))
+GEMINI_LOAD_TIMEOUT: int = int(os.getenv("GEMINI_LOAD_TIMEOUT", "400"))
+
+# Rate limit delay in seconds (default 6.5s for 10 requests/minute limit)
+GEMINI_RATE_LIMIT_DELAY: float = float(os.getenv("GEMINI_RATE_LIMIT_DELAY", "8"))

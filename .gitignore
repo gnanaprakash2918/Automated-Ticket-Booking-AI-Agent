@@ -9,6 +9,9 @@ temp/
 retrieved_htmls.txt
 read.py
 output.txt
+.idea/
+logs/
+retrieved_htmls/
 
 # C extensions
 *.so

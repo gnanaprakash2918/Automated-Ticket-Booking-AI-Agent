@@ -1,0 +1,43 @@
+You are an expert parsing engine. You will receive two CLEANED HTML fragments: 
+1. MAIN_LIST_HTML (Primary data)
+2. DETAIL_TABLE_HTML (Secondary data)
+
+TASK:
+Extract specific fields defined in the JSON_SCHEMA.
+Merge data from both sources based on the "Source of Truth" hierarchy below.
+
+{{FEW_SHOT}}
+
+---
+NEW TASK
+---
+MAIN_LIST_HTML
+{{MAIN_HTML}}
+---
+DETAIL_TABLE_HTML
+{{DETAIL_HTML}}
+---
+
+### SOURCE OF TRUTH HIERARCHY (CRITICAL RULES)
+1. **PRIMARY IDENTIFIERS (Codes & Dynamic Info):**
+   - **Source of Truth:** MAIN_LIST_HTML
+   - **Fallback:** DETAIL_TABLE_HTML
+   - Fields: trip_code (Service Code), route_code (Route No), price_in_rs, seats_available, departure_time, arrival_time, duration, via_route, bus_type.
+
+2. **SECONDARY STATIC DETAILS:**
+   - **Source of Truth:** DETAIL_TABLE_HTML
+   - **Fallback:** MAIN_LIST_HTML
+   - Fields: total_kms, operator (Corporation), child_fare.
+
+### FIELD SPECIFIC EXTRACTION LOGIC
+* via_route: Look for text starting with "Via-" in MAIN_LIST. Split by comma.
+* child_fare: Strictly from DETAIL_TABLE_HTML "Child Fare" column.
+* duration: Extract the numeric value string. "6.10Hrs" -> "6.10".
+* price_in_rs: Extract integers only.
+
+### FAILURE HANDLING
+* If a value is missing in Primary AND Fallback sources, return "NA".
+* Exceptions: via_route returns null, price_in_rs returns 0 if missing.
+
+### OUTPUT FORMAT
+Output strictly raw JSON. No markdown, no conversational text.
